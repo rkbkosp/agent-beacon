@@ -1,0 +1,137 @@
+{
+  "v": 2,
+  "id": "snapshot-301",
+  "type": "snapshot",
+  "ts": "2026-07-14T14:31:00+08:00",
+  "revision": 301,
+  "payload": {
+    "clock": {
+      "timezone": "Asia/Shanghai",
+      "server_time": "2026-07-14T14:31:00+08:00"
+    },
+    "codex": {
+      "homes": [
+        {
+          "id": "main",
+          "label": "MAIN",
+          "weekly_remaining_percent": 18,
+          "weekly_reset_at": "2026-07-15T11:39:00+08:00",
+          "reset_cards_available": 2,
+          "nearest_reset_card_expires_at": "2026-07-20T23:59:59+08:00",
+          "updated_at": "2026-07-14T14:30:00+08:00",
+          "freshness": "fresh"
+        },
+        {
+          "id": "vs",
+          "label": "VS",
+          "weekly_remaining_percent": 64,
+          "weekly_reset_at": "2026-07-18T09:00:00+08:00",
+          "reset_cards_available": 1,
+          "nearest_reset_card_expires_at": "2026-07-18T23:59:59+08:00",
+          "updated_at": "2026-07-14T14:30:00+08:00",
+          "freshness": "fresh"
+        }
+      ],
+      "relay": {
+        "remaining": 14.16,
+        "unit": "USD",
+        "is_valid": true,
+        "updated_at": "2026-07-14T14:30:00+08:00",
+        "freshness": "fresh"
+      }
+    },
+    "agents": {
+      "provider": "herdr",
+      "connected": true,
+      "updated_at": "2026-07-14T14:31:00+08:00",
+      "items": [
+        {
+          "pane_id": "w1:p1",
+          "terminal_id": "term-abc123",
+          "workspace_id": "w1",
+          "tab_id": "w1:t1",
+          "agent": "codex",
+          "display_name": "Chrome Plugin",
+          "status": "blocked",
+          "custom_status": "waiting approval",
+          "title": "Fix extension auth",
+          "focused": false,
+          "revision": 42,
+          "agent_session": { "source": "herdr:codex", "kind": "id", "value": "session-abc" }
+        },
+        {
+          "pane_id": "w1:p2",
+          "display_name": "CaseForge",
+          "status": "working",
+          "focused": true,
+          "revision": 18
+        },
+        {
+          "pane_id": "w1:p3",
+          "display_name": "Docs",
+          "status": "done",
+          "focused": false,
+          "revision": 9
+        },
+        {
+          "pane_id": "w1:p4",
+          "display_name": "Review",
+          "status": "idle",
+          "focused": false,
+          "revision": 3
+        },
+        {
+          "pane_id": "w1:p5",
+          "display_name": "Unknown pane",
+          "status": "unknown",
+          "focused": false,
+          "revision": 1
+        }
+      ]
+    },
+    "weather": {
+      "location": "Hangzhou",
+      "provider": "qweather",
+      "current": {
+        "observed_at": "2026-07-14T14:30:00+08:00",
+        "temp_c": 31,
+        "icon": "101",
+        "text": "Cloudy",
+        "precip_mm": 0.0,
+        "freshness": "fresh"
+      },
+      "lunch": {
+        "target_at": "2026-07-14T12:00:00+08:00",
+        "is_past": true,
+        "temp_c": 29,
+        "icon": "305",
+        "text": "Light rain",
+        "pop": 60,
+        "precip_mm": 0.5,
+        "freshness": "cached"
+      },
+      "leave": {
+        "target_at": "2026-07-14T19:00:00+08:00",
+        "is_past": false,
+        "temp_c": 27,
+        "icon": "305",
+        "text": "Light rain",
+        "pop": 70,
+        "precip_mm": 0.7,
+        "freshness": "fresh"
+      },
+      "next_outing": {
+        "slot": "leave",
+        "target_at": "2026-07-14T19:00:00+08:00",
+        "umbrella_required": true,
+        "confidence": "high",
+        "reason": "19:00 light rain, POP 70%"
+      },
+      "updated_at": "2026-07-14T14:31:00+08:00"
+    },
+    "system": {
+      "bridge_online": true,
+      "overall_freshness": "fresh"
+    }
+  }
+}

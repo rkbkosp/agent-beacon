@@ -1,0 +1,37 @@
+# Device-local backups
+/backups/*.bin
+
+# ESP-IDF generated files and downloaded components
+/firmware/build/
+/firmware/managed_components/
+/firmware/sdkconfig
+/firmware/sdkconfig.old
+/firmware/sdkconfig.old.*
+
+# Local firmware configuration and user-supplied licensed fonts
+/firmware/config.local.*
+/firmware/components/beacon_fonts/font_assets/MiLanPro-*.ttf
+
+# macOS bridge build output and local configuration
+/macos/bin/
+/macos/agent-beacon-bridge
+/macos/configs/token.local
+/macos/configs/config.local.*
+
+# Local data, credentials, and test output
+*.db
+*.db-shm
+*.db-wal
+*.log
+*.out
+.env
+.env.*
+!.env.example
+eim_config.toml
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~

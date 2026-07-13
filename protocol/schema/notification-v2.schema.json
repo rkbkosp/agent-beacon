@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "notification-v2.schema.json",
+  "title": "Agent Beacon v2 notification",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "id", "type", "ts", "revision", "payload"],
+  "properties": {
+    "v": { "const": 2 },
+    "id": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "type": { "const": "notification" },
+    "ts": { "type": "string", "format": "date-time" },
+    "revision": { "type": "integer", "minimum": 0 },
+    "payload": { "$ref": "#/$defs/notification" }
+  },
+  "$defs": {
+    "notification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "category", "kind", "source", "subject_id", "theme", "urgency", "priority",
+        "dedupe_key", "title", "display_ms", "expires_at"
+      ],
+      "properties": {
+        "category": { "enum": ["agent", "quota", "weather", "system"] },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^(agent|quota|weather|system)\\."
+        },
+        "source": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "subject_id": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "theme": { "enum": ["blue", "yellow", "red", "green"] },
+        "urgency": { "enum": ["normal", "attention", "urgent"] },
+        "priority": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "dedupe_key": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "supersede_key": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "group_key": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 28 },
+        "detail": { "type": "string", "maxLength": 64 },
+        "source_label": { "type": "string", "maxLength": 12 },
+        "display_ms": { "type": "integer", "minimum": 1500, "maximum": 12000 },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "sticky_badge": { "type": "boolean" },
+        "replay_after_interrupt": { "type": "boolean" },
+        "max_replays": { "type": "integer", "minimum": 0, "maximum": 255 }
+      },
+      "allOf": [
+        { "if": { "properties": { "category": { "const": "agent" } } }, "then": { "properties": { "kind": { "pattern": "^agent\\." } } } },
+        { "if": { "properties": { "category": { "const": "quota" } } }, "then": { "properties": { "kind": { "pattern": "^quota\\." } } } },
+        { "if": { "properties": { "category": { "const": "weather" } } }, "then": { "properties": { "kind": { "pattern": "^weather\\." } } } },
+        { "if": { "properties": { "category": { "const": "system" } } }, "then": { "properties": { "kind": { "pattern": "^system\\." } } } }
+      ]
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ack-v2.schema.json",
+  "title": "Agent Beacon v2 ACK",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "type", "id", "device_id", "status", "at"],
+  "properties": {
+    "v": { "const": 2 },
+    "type": { "const": "ack" },
+    "id": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "device_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "status": {
+      "enum": [
+        "received", "queued", "shown", "completed", "interrupted", "superseded",
+        "expired", "dropped", "invalid", "duplicate"
+      ]
+    },
+    "at": { "type": "string", "format": "date-time" },
+    "reason": { "type": "string", "maxLength": 96 }
+  }
+}

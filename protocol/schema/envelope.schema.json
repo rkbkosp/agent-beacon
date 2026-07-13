@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "envelope-v2.schema.json",
+  "title": "Agent Beacon v2 envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "id", "type", "ts", "revision", "payload"],
+  "properties": {
+    "v": { "const": 2 },
+    "id": { "type": "string", "minLength": 1, "maxLength": 48 },
+    "type": {
+      "enum": [
+        "hello", "snapshot", "state_patch", "notification", "heartbeat", "error",
+        "get_snapshot", "device_status", "button_action"
+      ]
+    },
+    "ts": { "type": "string", "format": "date-time" },
+    "revision": { "type": "integer", "minimum": 0 },
+    "payload": { "type": "object" }
+  }
+}

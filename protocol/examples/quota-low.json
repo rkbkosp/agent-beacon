@@ -1,0 +1,25 @@
+{
+  "v": 2,
+  "id": "evt-quota-low-303",
+  "type": "notification",
+  "ts": "2026-07-14T14:30:03+08:00",
+  "revision": 303,
+  "payload": {
+    "category": "quota",
+    "kind": "quota.weekly_15",
+    "source": "codex",
+    "subject_id": "main",
+    "theme": "yellow",
+    "urgency": "attention",
+    "priority": 65,
+    "dedupe_key": "quota:main:weekly:2026-w29:threshold:15",
+    "title": "Codex weekly quota low",
+    "detail": "MAIN - 14% remaining",
+    "source_label": "Codex",
+    "display_ms": 6000,
+    "expires_at": "2026-07-14T14:35:03+08:00",
+    "sticky_badge": true,
+    "replay_after_interrupt": true,
+    "max_replays": 1
+  }
+}

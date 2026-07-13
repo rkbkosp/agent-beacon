@@ -1,0 +1,27 @@
+{
+  "v": 2,
+  "id": "evt-agent-done-301",
+  "type": "notification",
+  "ts": "2026-07-14T14:30:01+08:00",
+  "revision": 301,
+  "payload": {
+    "category": "agent",
+    "kind": "agent.done",
+    "source": "herdr",
+    "subject_id": "w1:p1",
+    "theme": "green",
+    "urgency": "normal",
+    "priority": 50,
+    "dedupe_key": "agent:w1:p1:session-abc:done:42",
+    "supersede_key": "agent:w1:p1",
+    "group_key": "agent:done",
+    "title": "Agent completed",
+    "detail": "Chrome Plugin - ready",
+    "source_label": "Herdr",
+    "display_ms": 4000,
+    "expires_at": "2026-07-14T14:31:01+08:00",
+    "sticky_badge": false,
+    "replay_after_interrupt": false,
+    "max_replays": 0
+  }
+}

@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "snapshot-v2.schema.json",
+  "title": "Agent Beacon v2 snapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "id", "type", "ts", "revision", "payload"],
+  "properties": {
+    "v": { "const": 2 },
+    "id": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "type": { "const": "snapshot" },
+    "ts": { "type": "string", "format": "date-time" },
+    "revision": { "type": "integer", "minimum": 0 },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clock", "codex", "agents", "weather", "system"],
+      "properties": {
+        "clock": { "$ref": "#/$defs/clock" },
+        "codex": { "$ref": "#/$defs/codex" },
+        "agents": { "$ref": "#/$defs/agents" },
+        "weather": { "$ref": "#/$defs/weather" },
+        "system": { "$ref": "#/$defs/system" }
+      }
+    }
+  },
+  "$defs": {
+    "dateOrNull": { "type": ["string", "null"], "format": "date-time" },
+    "freshness": { "enum": ["fresh", "cached", "stale", "unknown"] },
+    "clock": {
+      "type": "object", "additionalProperties": false,
+      "required": ["timezone", "server_time"],
+      "properties": {
+        "timezone": { "type": "string", "minLength": 1, "maxLength": 48 },
+        "server_time": { "type": "string", "format": "date-time" }
+      }
+    },
+    "codex": {
+      "type": "object", "additionalProperties": false,
+      "required": ["homes", "relay"],
+      "properties": {
+        "homes": { "type": "array", "minItems": 1, "maxItems": 2, "items": { "$ref": "#/$defs/codexHome" } },
+        "relay": { "$ref": "#/$defs/relay" }
+      }
+    },
+    "codexHome": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "id", "label", "weekly_remaining_percent", "weekly_reset_at", "reset_cards_available",
+        "nearest_reset_card_expires_at", "updated_at", "freshness"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "label": { "type": "string", "minLength": 1, "maxLength": 12 },
+        "weekly_remaining_percent": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "weekly_reset_at": { "$ref": "#/$defs/dateOrNull" },
+        "reset_cards_available": { "type": ["integer", "null"], "minimum": 0 },
+        "nearest_reset_card_expires_at": { "$ref": "#/$defs/dateOrNull" },
+        "updated_at": { "type": "string", "format": "date-time" },
+        "freshness": { "$ref": "#/$defs/freshness" }
+      }
+    },
+    "relay": {
+      "type": "object", "additionalProperties": false,
+      "required": ["remaining", "unit", "is_valid", "updated_at", "freshness"],
+      "properties": {
+        "remaining": { "type": ["number", "null"] },
+        "unit": { "type": "string", "minLength": 1, "maxLength": 12 },
+        "is_valid": { "type": "boolean" },
+        "updated_at": { "type": "string", "format": "date-time" },
+        "freshness": { "$ref": "#/$defs/freshness" }
+      }
+    },
+    "agents": {
+      "type": "object", "additionalProperties": false,
+      "required": ["provider", "connected", "updated_at", "items"],
+      "properties": {
+        "provider": { "const": "herdr" },
+        "connected": { "type": "boolean" },
+        "updated_at": { "type": "string", "format": "date-time" },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/agent" } }
+      }
+    },
+    "agent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["pane_id", "display_name", "status", "focused", "revision"],
+      "properties": {
+        "pane_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "terminal_id": { "type": "string", "maxLength": 64 },
+        "workspace_id": { "type": "string", "maxLength": 64 },
+        "tab_id": { "type": "string", "maxLength": 64 },
+        "agent": { "type": "string", "maxLength": 32 },
+        "display_name": { "type": "string", "minLength": 1, "maxLength": 48 },
+        "status": { "enum": ["working", "blocked", "done", "idle", "unknown"] },
+        "custom_status": { "type": "string", "maxLength": 64 },
+        "title": { "type": "string", "maxLength": 96 },
+        "focused": { "type": "boolean" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "agent_session": { "$ref": "#/$defs/agentSession" }
+      }
+    },
+    "agentSession": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source", "kind", "value"],
+      "properties": {
+        "source": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "kind": { "type": "string", "minLength": 1, "maxLength": 24 },
+        "value": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "weather": {
+      "type": "object", "additionalProperties": false,
+      "required": ["location", "provider", "current", "lunch", "leave", "next_outing", "updated_at"],
+      "properties": {
+        "location": { "type": "string", "minLength": 1, "maxLength": 48 },
+        "provider": { "const": "qweather" },
+        "current": { "$ref": "#/$defs/currentWeather" },
+        "lunch": { "$ref": "#/$defs/weatherSlot" },
+        "leave": { "$ref": "#/$defs/weatherSlot" },
+        "next_outing": { "$ref": "#/$defs/nextOuting" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "currentWeather": {
+      "type": "object", "additionalProperties": false,
+      "required": ["observed_at", "temp_c", "icon", "text", "precip_mm", "freshness"],
+      "properties": {
+        "observed_at": { "type": "string", "format": "date-time" },
+        "temp_c": { "type": "integer", "minimum": -80, "maximum": 80 },
+        "icon": { "type": "string", "minLength": 1, "maxLength": 16 },
+        "text": { "type": "string", "minLength": 1, "maxLength": 24 },
+        "precip_mm": { "type": "number", "minimum": 0 },
+        "freshness": { "$ref": "#/$defs/freshness" }
+      }
+    },
+    "weatherSlot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["target_at", "is_past", "temp_c", "icon", "text", "pop", "precip_mm", "freshness"],
+      "properties": {
+        "target_at": { "type": "string", "format": "date-time" },
+        "is_past": { "type": "boolean" },
+        "temp_c": { "type": "integer", "minimum": -80, "maximum": 80 },
+        "icon": { "type": "string", "minLength": 1, "maxLength": 16 },
+        "text": { "type": "string", "minLength": 1, "maxLength": 24 },
+        "pop": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "precip_mm": { "type": "number", "minimum": 0 },
+        "freshness": { "$ref": "#/$defs/freshness" }
+      }
+    },
+    "nextOuting": {
+      "type": "object", "additionalProperties": false,
+      "required": ["slot", "target_at", "umbrella_required", "confidence", "reason"],
+      "properties": {
+        "slot": { "enum": ["lunch", "leave", "none"] },
+        "target_at": { "$ref": "#/$defs/dateOrNull" },
+        "umbrella_required": { "type": ["boolean", "null"] },
+        "confidence": { "enum": ["high", "medium", "low", "unknown"] },
+        "reason": { "type": "string", "maxLength": 96 }
+      }
+    },
+    "system": {
+      "type": "object", "additionalProperties": false,
+      "required": ["bridge_online", "overall_freshness"],
+      "properties": {
+        "bridge_online": { "type": "boolean" },
+        "overall_freshness": { "$ref": "#/$defs/freshness" }
+      }
+    }
+  }
+}

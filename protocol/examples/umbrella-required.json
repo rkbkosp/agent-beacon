@@ -1,0 +1,26 @@
+{
+  "v": 2,
+  "id": "evt-umbrella-304",
+  "type": "notification",
+  "ts": "2026-07-14T14:30:04+08:00",
+  "revision": 304,
+  "payload": {
+    "category": "weather",
+    "kind": "weather.umbrella_required",
+    "source": "qweather",
+    "subject_id": "hangzhou:leave:2026-07-14T19:00:00+08:00",
+    "theme": "red",
+    "urgency": "attention",
+    "priority": 72,
+    "dedupe_key": "weather:hangzhou:leave:20260714T1900:umbrella",
+    "supersede_key": "weather:hangzhou:leave:20260714T1900",
+    "title": "Bring an umbrella",
+    "detail": "19:00 - rain 70%",
+    "source_label": "QWeather",
+    "display_ms": 6500,
+    "expires_at": "2026-07-14T20:00:00+08:00",
+    "sticky_badge": true,
+    "replay_after_interrupt": true,
+    "max_replays": 1
+  }
+}

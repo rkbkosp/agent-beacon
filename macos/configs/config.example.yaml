@@ -1,0 +1,74 @@
+server:
+  listen: "0.0.0.0:8787"
+  device_send_queue: 64
+  max_request_bytes: 262144
+  token_file: "~/Library/Application Support/AgentBeacon/token"
+
+notifications:
+  queue_capacity: 14
+  dedupe_window: 60s
+
+providers:
+  mock:
+    # 生产运行关闭；只有手工演示 fixture 时才打开。
+    enabled: false
+  codex:
+    enabled: true
+    refresh_interval: 60s
+    stale_after: 3m
+    homes:
+      - id: main
+        label: MAIN
+        path: ~/.codex
+      - id: vs
+        label: VS
+        path: ~/.codex-vs
+    adapter:
+      # @bridge 会在启动时解析为当前 agent-beacon-bridge 的绝对路径。
+      command: ["@bridge", "codex-adapter"]
+      timeout: 10s
+      max_stdout_bytes: 65536
+  relay_balance:
+    enabled: true
+    endpoint: https://api.0-0.pro/v1/usage
+    secret_name: zero-api-key
+    refresh_interval: 5m
+    timeout: 5s
+    stale_after: 20m
+  herdr:
+    enabled: true
+    session: default
+    socket_path: ""
+    reconnect_max: 30s
+    full_resync_interval: 60s
+  weather:
+    # 启用前复制本文件为本地配置，并填入和风天气控制台中的实际值。
+    enabled: false
+    provider: qweather
+    api_host: "YOUR_ACCOUNT_HOST.qweatherapi.com"
+    project_id: "YOUR_PROJECT_ID"
+    credential_id: "YOUR_CREDENTIAL_ID"
+    private_key_path: "~/.weather/ed25519-private.pem"
+    public_key_path: "~/.weather/ed25519-public.pem"
+    location: "120.16,30.27"
+    location_label: "杭州"
+    timezone: "Asia/Shanghai"
+    lang: "zh"
+    schedule:
+      lunch: "12:00"
+      leave: "19:00"
+      active_weekdays: [1, 2, 3, 4, 5]
+    refresh:
+      now: 10m
+      hourly: 30m
+      request_timeout: 8s
+      force_before_outing: [60m, 30m]
+    cache:
+      now_stale_after: 45m
+      hourly_stale_after: 90m
+      persist_last_good: true
+    umbrella:
+      window_before: 60m
+      window_after: 60m
+      pop_threshold: 40
+      repeat_before_outing: 30m

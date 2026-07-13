@@ -1,0 +1,8 @@
+{
+  "v": 2,
+  "type": "ack",
+  "id": "evt-agent-done-301",
+  "device_id": "agent-beacon-01",
+  "status": "shown",
+  "at": "2026-07-14T14:30:02+08:00"
+}

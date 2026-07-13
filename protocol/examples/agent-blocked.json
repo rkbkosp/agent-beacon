@@ -1,0 +1,26 @@
+{
+  "v": 2,
+  "id": "evt-agent-blocked-302",
+  "type": "notification",
+  "ts": "2026-07-14T14:30:02+08:00",
+  "revision": 302,
+  "payload": {
+    "category": "agent",
+    "kind": "agent.blocked",
+    "source": "herdr",
+    "subject_id": "w1:p1",
+    "theme": "yellow",
+    "urgency": "attention",
+    "priority": 75,
+    "dedupe_key": "agent:w1:p1:session-abc:blocked:43",
+    "supersede_key": "agent:w1:p1",
+    "title": "Agent needs attention",
+    "detail": "Chrome Plugin - approval",
+    "source_label": "Herdr",
+    "display_ms": 7000,
+    "expires_at": "2026-07-14T15:00:02+08:00",
+    "sticky_badge": true,
+    "replay_after_interrupt": true,
+    "max_replays": 1
+  }
+}
