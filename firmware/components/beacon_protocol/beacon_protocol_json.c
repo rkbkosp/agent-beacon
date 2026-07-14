@@ -407,7 +407,8 @@ static bool parse_weather_current(const cJSON *object, beacon_weather_current_t 
 {
     int temp;
     return cJSON_IsObject(object) &&
-           cJSON_IsString(cJSON_GetObjectItemCaseSensitive(object, "observed_at")) &&
+           format_timestamp(cJSON_GetObjectItemCaseSensitive(object, "observed_at"),
+                            current->observed_time, sizeof(current->observed_time), false) &&
            integer_in_range(cJSON_GetObjectItemCaseSensitive(object, "temp_c"), -80, 80, &temp) &&
            (current->temp_c = (int16_t)temp, true) &&
            copy_json_string(object, "icon", current->icon, sizeof(current->icon), true) &&

@@ -76,6 +76,7 @@ static void test_valid_snapshot_and_patch(void)
     assert(message.state.agents.items[3].status == BEACON_AGENT_IDLE);
     assert(message.state.weather.next_outing.umbrella_required);
     assert(strcmp(message.state.weather.provider, "和风天气") == 0);
+    assert(strcmp(message.state.weather.current.observed_time, "14:30") == 0);
     assert(strcmp(message.state.weather.lunch.label, "午饭") == 0);
     assert(strcmp(message.state.weather.leave.label, "下班") == 0);
     assert(strcmp(message.state.system.display_time, "14:31") == 0);

@@ -45,7 +45,8 @@ void beacon_app_state_init_mock(beacon_app_state_t *state)
     strcpy(state->weather.location, "杭州");
     strcpy(state->weather.provider, "和风天气");
     state->weather.current = (beacon_weather_current_t) {
-        .temp_c = 31, .text = "多云", .icon = "101", .freshness = BEACON_FRESHNESS_FRESH,
+        .observed_time = "14:30", .temp_c = 31, .text = "多云", .icon = "101",
+        .freshness = BEACON_FRESHNESS_FRESH,
     };
     state->weather.lunch = (beacon_weather_slot_t) {
         .label = "午饭", .time = "12:00", .temp_c = 29,

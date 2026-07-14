@@ -105,14 +105,21 @@ static void begin_screen(uint32_t background)
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
 }
 
-static void create_header(const char *title, const char *suffix)
+static void create_header_with_title_width(const char *title, const char *suffix,
+                                           lv_coord_t title_width)
 {
-    set_text(create_label(8, 3, 176, 18, FONT_HEADING_14, LV_TEXT_ALIGN_LEFT,
+    set_text(create_label(8, 3, title_width, 18, FONT_HEADING_14, LV_TEXT_ALIGN_LEFT,
                           COLOR_FOREGROUND), title);
-    set_text(create_label(188, 3, 124, 18, FONT_BODY_14, LV_TEXT_ALIGN_RIGHT,
+    set_text(create_label(12 + title_width, 3, 300 - title_width, 18, FONT_BODY_14,
+                          LV_TEXT_ALIGN_RIGHT,
                           COLOR_MUTED), suffix);
     lv_obj_t *line = create_box(8, 22, 304, 1, COLOR_SUBTLE);
     lv_obj_set_style_radius(line, 0, 0);
+}
+
+static void create_header(const char *title, const char *suffix)
+{
+    create_header_with_title_width(title, suffix, 176);
 }
 
 static const char *connection_suffix(void)
@@ -290,16 +297,16 @@ static const char *next_outing_label(const beacon_weather_state_t *weather)
 static void show_weather_page(void)
 {
     begin_screen(COLOR_BACKGROUND);
-    char header[48];
+    char header[64];
     char recommendation[64];
     const char *outing_label = next_outing_label(&app_state.weather);
     const lv_font_t *recommendation_font = FONT_HEADING_18;
     uint32_t recommendation_color = COLOR_FOREGROUND;
     bool show_recommendation_background = true;
 
-    lv_snprintf(header, sizeof(header), "%s  %s", app_state.weather.location,
-                app_state.weather.provider);
-    create_header(header, connection_suffix());
+    lv_snprintf(header, sizeof(header), "%s · %s · %s 更新", app_state.weather.location,
+                app_state.weather.provider, app_state.weather.current.observed_time);
+    create_header_with_title_width(header, connection_suffix(), 210);
 
     create_weather_column("当前", app_state.weather.current.temp_c,
                           app_state.weather.current.text, 8,

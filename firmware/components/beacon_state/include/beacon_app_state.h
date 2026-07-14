@@ -71,6 +71,7 @@ typedef struct {
 } beacon_agents_state_t;
 
 typedef struct {
+    char observed_time[8];
     int16_t temp_c;
     char text[16];
     char icon[8];
