@@ -39,6 +39,19 @@ const (
 	refreshAll = refreshNow | refreshHourly
 )
 
+type dailyRefreshTime struct {
+	hour   int
+	minute int
+}
+
+var (
+	chinaStandardTime  = time.FixedZone("CST", 8*60*60)
+	forcedRefreshTimes = [...]dailyRefreshTime{
+		{hour: 11, minute: 55},
+		{hour: 18, minute: 20},
+	}
+)
+
 type providerFlight struct {
 	done    chan struct{}
 	updates []providers.Update
@@ -118,9 +131,11 @@ func (provider *Provider) Start(ctx context.Context, output chan<- providers.Upd
 	nowTicker := time.NewTicker(provider.config.Refresh.Now)
 	hourlyTicker := time.NewTicker(provider.config.Refresh.Hourly)
 	minuteTicker := time.NewTicker(time.Minute)
+	forcedRefreshTimer := newForcedRefreshTimer(provider.now())
 	defer nowTicker.Stop()
 	defer hourlyTicker.Stop()
 	defer minuteTicker.Stop()
+	defer forcedRefreshTimer.Stop()
 	for {
 		var next []providers.Update
 		select {
@@ -132,11 +147,37 @@ func (provider *Provider) Start(ctx context.Context, output chan<- providers.Upd
 			next, _ = provider.refresh(ctx, refreshHourly, false)
 		case <-minuteTicker.C:
 			next, _ = provider.minuteUpdates(ctx)
+		case <-forcedRefreshTimer.C:
+			next, _ = provider.Refresh(ctx, true)
+			resetForcedRefreshTimer(forcedRefreshTimer, provider.now())
 		}
 		if err := sendProviderUpdates(ctx, output, next); err != nil {
 			return err
 		}
 	}
+}
+
+func nextCSTForcedRefresh(now time.Time) time.Time {
+	localNow := now.In(chinaStandardTime)
+	for _, scheduled := range forcedRefreshTimes {
+		candidate := time.Date(localNow.Year(), localNow.Month(), localNow.Day(),
+			scheduled.hour, scheduled.minute, 0, 0, chinaStandardTime)
+		if candidate.After(localNow) {
+			return candidate
+		}
+	}
+	tomorrow := localNow.AddDate(0, 0, 1)
+	first := forcedRefreshTimes[0]
+	return time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(),
+		first.hour, first.minute, 0, 0, chinaStandardTime)
+}
+
+func newForcedRefreshTimer(now time.Time) *time.Timer {
+	return time.NewTimer(nextCSTForcedRefresh(now).Sub(now))
+}
+
+func resetForcedRefreshTimer(timer *time.Timer, now time.Time) {
+	timer.Reset(nextCSTForcedRefresh(now).Sub(now))
 }
 
 func (provider *Provider) Snapshot(context.Context) (protocol.StatePatch, error) {

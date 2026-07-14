@@ -105,6 +105,42 @@ func providerHourly(at, target time.Time, wet bool) HourlyData {
 		Raw: json.RawMessage(`{"code":"200","updateTime":"2026-07-14T10:00+08:00","hourly":[{"fxTime":"2026-07-14T12:00+08:00","temp":"27","icon":"305","text":"小雨","pop":"70","precip":"0.5"}],"refer":{"sources":["QWeather"],"license":["license"]}}`)}
 }
 
+func TestNextCSTForcedRefresh(t *testing.T) {
+	tests := []struct {
+		name string
+		now  time.Time
+		want time.Time
+	}{
+		{
+			name: "before lunch refresh",
+			now:  shanghaiTime(t, 2026, time.July, 14, 11, 54),
+			want: shanghaiTime(t, 2026, time.July, 14, 11, 55),
+		},
+		{
+			name: "after lunch refresh",
+			now:  shanghaiTime(t, 2026, time.July, 14, 11, 55),
+			want: shanghaiTime(t, 2026, time.July, 14, 18, 20),
+		},
+		{
+			name: "before evening refresh from UTC",
+			now:  time.Date(2026, time.July, 14, 10, 19, 30, 0, time.UTC),
+			want: time.Date(2026, time.July, 14, 10, 20, 0, 0, time.UTC),
+		},
+		{
+			name: "after evening refresh",
+			now:  shanghaiTime(t, 2026, time.July, 14, 18, 20),
+			want: shanghaiTime(t, 2026, time.July, 15, 11, 55),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := nextCSTForcedRefresh(test.now); !got.Equal(test.want) {
+				t.Fatalf("next forced refresh = %s, want %s", got, test.want)
+			}
+		})
+	}
+}
+
 func TestProviderStartsFromCacheThenRefreshesBothEndpoints(t *testing.T) {
 	config := testWeatherConfig()
 	now := shanghaiTime(t, 2026, time.July, 14, 10, 0)
