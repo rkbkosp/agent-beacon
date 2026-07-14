@@ -98,7 +98,13 @@ static void apply_protocol_state(const beacon_protocol_message_t *message,
     beacon_app_state_apply(&app_state, &message->state, message->state_domains,
                            message->revision);
     beacon_ui_set_app_state(&app_state);
-    show_current_surface(ui_state);
+    if (ui_state->mode == BEACON_UI_DIAGNOSTICS) {
+        beacon_ui_show_diagnostics();
+    } else if (ui_state->mode == BEACON_UI_CAROUSEL &&
+               beacon_ui_page_affected_by_domains(ui_state->page,
+                                                  message->state_domains)) {
+        beacon_ui_refresh_page(ui_state->page);
+    }
     ESP_LOGI(TAG, "state type=%d domains=0x%02x revision=%llu", message->type,
              message->state_domains, (unsigned long long)message->revision);
 }

@@ -385,11 +385,8 @@ void beacon_ui_set_app_state(const beacon_app_state_t *state)
     }
 }
 
-void beacon_ui_show_page(beacon_page_t page)
+static bool render_page(beacon_page_t page)
 {
-    if (screen == NULL) {
-        return;
-    }
     switch (page) {
     case BEACON_PAGE_CODEX:
         show_codex_page();
@@ -401,10 +398,34 @@ void beacon_ui_show_page(beacon_page_t page)
         show_weather_page();
         break;
     default:
+        return false;
+    }
+    return true;
+}
+
+void beacon_ui_show_page(beacon_page_t page)
+{
+    if (screen == NULL) {
+        return;
+    }
+    lv_anim_del(screen, NULL);
+    if (!render_page(page)) {
         return;
     }
     lv_obj_set_style_opa(screen, LV_OPA_0, 0);
     lv_obj_fade_in(screen, 160, 0);
+}
+
+void beacon_ui_refresh_page(beacon_page_t page)
+{
+    if (screen == NULL) {
+        return;
+    }
+    lv_anim_del(screen, NULL);
+    if (!render_page(page)) {
+        return;
+    }
+    lv_obj_set_style_opa(screen, LV_OPA_COVER, 0);
 }
 
 void beacon_ui_show_diagnostics(void)

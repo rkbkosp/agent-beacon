@@ -1,6 +1,34 @@
 #include <assert.h>
 
+#include "beacon_app_state.h"
 #include "beacon_ui_state.h"
+
+static void test_page_domain_visibility(void)
+{
+    assert(beacon_ui_page_affected_by_domains(BEACON_PAGE_CODEX,
+                                               BEACON_STATE_DOMAIN_CODEX));
+    assert(!beacon_ui_page_affected_by_domains(BEACON_PAGE_CODEX,
+                                                BEACON_STATE_DOMAIN_AGENTS));
+    assert(!beacon_ui_page_affected_by_domains(BEACON_PAGE_CODEX,
+                                                BEACON_STATE_DOMAIN_WEATHER));
+
+    assert(beacon_ui_page_affected_by_domains(BEACON_PAGE_AGENTS,
+                                               BEACON_STATE_DOMAIN_AGENTS));
+    assert(beacon_ui_page_affected_by_domains(BEACON_PAGE_WEATHER,
+                                               BEACON_STATE_DOMAIN_WEATHER));
+
+    assert(beacon_ui_page_affected_by_domains(BEACON_PAGE_CODEX,
+                                               BEACON_STATE_DOMAIN_SYSTEM));
+    assert(beacon_ui_page_affected_by_domains(BEACON_PAGE_AGENTS,
+                                               BEACON_STATE_DOMAIN_SYSTEM));
+    assert(beacon_ui_page_affected_by_domains(BEACON_PAGE_WEATHER,
+                                               BEACON_STATE_DOMAIN_SYSTEM));
+
+    assert(!beacon_ui_page_affected_by_domains(BEACON_PAGE_CODEX,
+                                                BEACON_STATE_DOMAIN_CLOCK));
+    assert(!beacon_ui_page_affected_by_domains(BEACON_PAGE_COUNT,
+                                                BEACON_STATE_DOMAIN_ALL));
+}
 
 static void test_carousel_and_manual_navigation(void)
 {
@@ -77,6 +105,7 @@ static void test_diagnostics_is_not_in_carousel(void)
 
 int main(void)
 {
+    test_page_domain_visibility();
     test_carousel_and_manual_navigation();
     test_notification_restores_interrupted_page();
     test_elapsed_time_carries_across_boundaries();

@@ -20,6 +20,12 @@ queue drains.
 There are no task, inbox, message, evaluation, benchmark, or Codex five-hour
 window pages or models in the current scope.
 
+State patches always update the in-memory model. A patch redraws the visible
+carousel page without a fade only when it changes that page's domain or the
+shared system status shown in every header. Other page domains remain a silent
+background update and render from the latest model on the next page switch.
+Notifications continue to suppress carousel redraws while visible.
+
 ## Notification Themes
 
 | Theme | Background | Foreground | Default |

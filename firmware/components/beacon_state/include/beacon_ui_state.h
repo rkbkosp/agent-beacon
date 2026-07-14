@@ -35,6 +35,7 @@ typedef struct {
 } beacon_ui_state_t;
 
 uint32_t beacon_ui_page_interval_ms(beacon_page_t page);
+bool beacon_ui_page_affected_by_domains(beacon_page_t page, uint8_t domains);
 void beacon_ui_state_init(beacon_ui_state_t *state);
 bool beacon_ui_state_tick(beacon_ui_state_t *state, uint32_t elapsed_ms);
 void beacon_ui_state_next_page(beacon_ui_state_t *state);

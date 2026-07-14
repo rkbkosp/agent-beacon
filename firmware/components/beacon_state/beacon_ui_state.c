@@ -2,6 +2,8 @@
 
 #include <stddef.h>
 
+#include "beacon_app_state.h"
+
 uint32_t beacon_ui_page_interval_ms(beacon_page_t page)
 {
     switch (page) {
@@ -12,6 +14,27 @@ uint32_t beacon_ui_page_interval_ms(beacon_page_t page)
     default:
         return 8000;
     }
+}
+
+bool beacon_ui_page_affected_by_domains(beacon_page_t page, uint8_t domains)
+{
+    uint8_t page_domain;
+    switch (page) {
+    case BEACON_PAGE_CODEX:
+        page_domain = BEACON_STATE_DOMAIN_CODEX;
+        break;
+    case BEACON_PAGE_AGENTS:
+        page_domain = BEACON_STATE_DOMAIN_AGENTS;
+        break;
+    case BEACON_PAGE_WEATHER:
+        page_domain = BEACON_STATE_DOMAIN_WEATHER;
+        break;
+    default:
+        return false;
+    }
+
+    // Connection/freshness status appears in every carousel page header.
+    return (domains & (page_domain | BEACON_STATE_DOMAIN_SYSTEM)) != 0U;
 }
 
 static beacon_page_t next_page(beacon_page_t page)
