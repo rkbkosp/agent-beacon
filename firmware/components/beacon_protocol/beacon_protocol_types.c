@@ -115,8 +115,8 @@ const char *beacon_protocol_ack_status_string(beacon_ack_status_t status)
     }
 }
 
-beacon_revision_result_t beacon_revision_tracker_message(beacon_revision_tracker_t *tracker,
-                                                         uint64_t incoming_revision)
+beacon_revision_result_t beacon_revision_tracker_check(const beacon_revision_tracker_t *tracker,
+                                                       uint64_t incoming_revision)
 {
     if (tracker == NULL || incoming_revision == 0 || incoming_revision <= tracker->current) {
         return BEACON_REVISION_DUPLICATE;
@@ -124,15 +124,24 @@ beacon_revision_result_t beacon_revision_tracker_message(beacon_revision_tracker
     if (tracker->current != 0 && incoming_revision != tracker->current + 1U) {
         return BEACON_REVISION_GAP;
     }
-    tracker->current = incoming_revision;
     return BEACON_REVISION_ACCEPTED;
 }
 
-void beacon_revision_tracker_snapshot(beacon_revision_tracker_t *tracker, uint64_t revision)
+void beacon_revision_tracker_commit(beacon_revision_tracker_t *tracker, uint64_t revision)
 {
     if (tracker != NULL) {
         tracker->current = revision;
     }
+}
+
+bool beacon_revision_tracker_commit_delivery(beacon_revision_tracker_t *tracker,
+                                             uint64_t revision, bool delivered)
+{
+    if (tracker == NULL || !delivered) {
+        return false;
+    }
+    beacon_revision_tracker_commit(tracker, revision);
+    return true;
 }
 
 bool beacon_protocol_parse_rfc3339_ms(const char *value, int64_t *timestamp_ms)

@@ -25,9 +25,11 @@ bool beacon_protocol_category_from_string(const char *value,
                                           beacon_notification_category_t *category);
 bool beacon_protocol_urgency_from_string(const char *value, beacon_urgency_t *urgency);
 const char *beacon_protocol_ack_status_string(beacon_ack_status_t status);
-beacon_revision_result_t beacon_revision_tracker_message(beacon_revision_tracker_t *tracker,
-                                                         uint64_t incoming_revision);
-void beacon_revision_tracker_snapshot(beacon_revision_tracker_t *tracker, uint64_t revision);
+beacon_revision_result_t beacon_revision_tracker_check(const beacon_revision_tracker_t *tracker,
+                                                       uint64_t incoming_revision);
+void beacon_revision_tracker_commit(beacon_revision_tracker_t *tracker, uint64_t revision);
+bool beacon_revision_tracker_commit_delivery(beacon_revision_tracker_t *tracker,
+                                             uint64_t revision, bool delivered);
 bool beacon_protocol_parse_rfc3339_ms(const char *value, int64_t *timestamp_ms);
 
 typedef enum {

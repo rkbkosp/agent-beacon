@@ -166,9 +166,12 @@ static void protocol_task(void *argument)
             continue;
         }
         if (message.type == BEACON_PROTOCOL_MESSAGE_SNAPSHOT) {
-            beacon_revision_tracker_snapshot(&revision_tracker, message.revision);
-            if (!queue_for_ui(&message)) {
+            const bool queued = queue_for_ui(&message);
+            if (!beacon_revision_tracker_commit_delivery(&revision_tracker,
+                                                         message.revision, queued)) {
                 ESP_LOGW(TAG, "UI state queue full after snapshot");
+                (void)send_get_snapshot("ui_queue_full");
+                continue;
             }
             ESP_LOGI(TAG, "Snapshot revision=%llu", (unsigned long long)message.revision);
             continue;
@@ -179,7 +182,7 @@ static void protocol_task(void *argument)
         }
 
         const beacon_revision_result_t revision_result =
-            beacon_revision_tracker_message(&revision_tracker, message.revision);
+            beacon_revision_tracker_check(&revision_tracker, message.revision);
         if (revision_result == BEACON_REVISION_DUPLICATE) {
             if (message.type == BEACON_PROTOCOL_MESSAGE_NOTIFICATION) {
                 send_simple_ack(&message.notification, BEACON_ACK_DUPLICATE, "revision_duplicate");
@@ -193,7 +196,16 @@ static void protocol_task(void *argument)
             (void)send_get_snapshot("revision_gap");
             continue;
         }
-        if (!queue_for_ui(&message)) {
+        const bool queued = queue_for_ui(&message);
+        if (queued) {
+            (void)beacon_revision_tracker_commit_delivery(&revision_tracker,
+                                                          message.revision, true);
+        } else if (message.type == BEACON_PROTOCOL_MESSAGE_NOTIFICATION) {
+            // A dropped notification has an explicit terminal ACK, so it is
+            // safe to consume its revision even though it was not shown.
+            beacon_revision_tracker_commit(&revision_tracker, message.revision);
+        }
+        if (!queued) {
             if (message.type == BEACON_PROTOCOL_MESSAGE_NOTIFICATION) {
                 send_simple_ack(&message.notification, BEACON_ACK_DROPPED, "ui_queue_full");
             } else {

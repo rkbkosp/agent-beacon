@@ -26,14 +26,38 @@ static void test_enum_and_ack_mapping(void)
 static void test_revision_tracker(void)
 {
     beacon_revision_tracker_t tracker = {0};
-    assert(beacon_revision_tracker_message(&tracker, 1) == BEACON_REVISION_ACCEPTED);
+    assert(beacon_revision_tracker_check(&tracker, 1) == BEACON_REVISION_ACCEPTED);
+    assert(beacon_revision_tracker_commit_delivery(&tracker, 1, true));
     assert(tracker.current == 1);
-    assert(beacon_revision_tracker_message(&tracker, 1) == BEACON_REVISION_DUPLICATE);
-    assert(beacon_revision_tracker_message(&tracker, 3) == BEACON_REVISION_GAP);
+    assert(beacon_revision_tracker_check(&tracker, 1) == BEACON_REVISION_DUPLICATE);
+    assert(beacon_revision_tracker_check(&tracker, 3) == BEACON_REVISION_GAP);
     assert(tracker.current == 1);
-    beacon_revision_tracker_snapshot(&tracker, 3);
+    beacon_revision_tracker_commit(&tracker, 3);
     assert(tracker.current == 3);
-    assert(beacon_revision_tracker_message(&tracker, 4) == BEACON_REVISION_ACCEPTED);
+    assert(beacon_revision_tracker_check(&tracker, 4) == BEACON_REVISION_ACCEPTED);
+    assert(beacon_revision_tracker_commit_delivery(&tracker, 4, true));
+}
+
+static void test_revision_commits_only_after_delivery(void)
+{
+    beacon_revision_tracker_t tracker = {.current = 10};
+
+    assert(beacon_revision_tracker_check(&tracker, 11) == BEACON_REVISION_ACCEPTED);
+    assert(tracker.current == 10);
+    assert(!beacon_revision_tracker_commit_delivery(&tracker, 11, false));
+    assert(tracker.current == 10);
+    assert(beacon_revision_tracker_check(&tracker, 12) == BEACON_REVISION_GAP);
+
+    assert(beacon_revision_tracker_commit_delivery(&tracker, 11, true));
+    assert(tracker.current == 11);
+    assert(beacon_revision_tracker_check(&tracker, 12) == BEACON_REVISION_ACCEPTED);
+
+    // A bridge restart can provide an authoritative revision-zero snapshot.
+    // Rejecting that snapshot at a full UI queue must preserve the old tracker.
+    assert(!beacon_revision_tracker_commit_delivery(&tracker, 0, false));
+    assert(tracker.current == 11);
+    assert(beacon_revision_tracker_commit_delivery(&tracker, 0, true));
+    assert(tracker.current == 0);
 }
 
 static void test_rfc3339_parser(void)
@@ -52,6 +76,7 @@ int main(void)
 {
     test_enum_and_ack_mapping();
     test_revision_tracker();
+    test_revision_commits_only_after_delivery();
     test_rfc3339_parser();
     return 0;
 }
