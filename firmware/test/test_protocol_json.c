@@ -103,6 +103,80 @@ static void test_valid_snapshot_and_patch(void)
     assert(strcmp(message.state.codex.relay.display, "凭证无效") == 0);
 }
 
+static void repeat_utf8(char *destination, size_t destination_size,
+                        const char *value, size_t count)
+{
+    const size_t value_length = strlen(value);
+    assert(count * value_length + 1U <= destination_size);
+    for (size_t index = 0; index < count; ++index) {
+        memcpy(destination + index * value_length, value, value_length);
+    }
+    destination[count * value_length] = '\0';
+}
+
+static void test_display_strings_truncate_at_utf8_boundaries(void)
+{
+    beacon_protocol_message_t message;
+    char display_name[48U * 3U + 1U];
+    char custom_status[64U * 3U + 1U];
+    repeat_utf8(display_name, sizeof(display_name), "中", 48U);
+    repeat_utf8(custom_status, sizeof(custom_status), "态", 64U);
+
+    char agents_patch[2048];
+    const int agents_length = snprintf(
+        agents_patch, sizeof(agents_patch),
+        "{\"v\":2,\"id\":\"patch-long-agent\",\"type\":\"state_patch\","
+        "\"ts\":\"2026-07-14T14:32:00+08:00\",\"revision\":304,\"payload\":{"
+        "\"agents\":{\"provider\":\"herdr\",\"connected\":true,"
+        "\"updated_at\":\"2026-07-14T14:32:00+08:00\",\"items\":[{"
+        "\"pane_id\":\"p1\",\"display_name\":\"%s\",\"status\":\"working\","
+        "\"custom_status\":\"%s\",\"focused\":false,\"revision\":1}]}}}",
+        display_name, custom_status);
+    assert(agents_length > 0 && (size_t)agents_length < sizeof(agents_patch));
+    assert(beacon_protocol_decode(agents_patch, (size_t)agents_length, &message));
+    assert(message.type == BEACON_PROTOCOL_MESSAGE_STATE_PATCH);
+    assert(strcmp(message.state.agents.items[0].display_name,
+                  "中中中中中中中中中") == 0);
+    assert(strcmp(message.state.agents.items[0].secondary,
+                  "态态态态态态态态态态态") == 0);
+
+    char location[48U * 3U + 1U];
+    char weather_text[24U * 3U + 1U];
+    char reason[96U * 3U + 1U];
+    repeat_utf8(location, sizeof(location), "杭", 48U);
+    repeat_utf8(weather_text, sizeof(weather_text), "雨", 24U);
+    repeat_utf8(reason, sizeof(reason), "湿", 96U);
+
+    char weather_patch[4096];
+    const int weather_length = snprintf(
+        weather_patch, sizeof(weather_patch),
+        "{\"v\":2,\"id\":\"patch-long-weather\",\"type\":\"state_patch\","
+        "\"ts\":\"2026-07-14T14:33:00+08:00\",\"revision\":305,\"payload\":{"
+        "\"weather\":{\"location\":\"%s\",\"provider\":\"qweather\","
+        "\"current\":{\"observed_at\":\"2026-07-14T14:30:00+08:00\","
+        "\"temp_c\":31,\"icon\":\"101\",\"text\":\"%s\",\"precip_mm\":0,"
+        "\"freshness\":\"fresh\"},"
+        "\"lunch\":{\"target_at\":\"2026-07-14T12:00:00+08:00\","
+        "\"is_past\":true,\"temp_c\":29,\"icon\":\"305\","
+        "\"text\":\"12345678901234中\",\"pop\":60,\"precip_mm\":0.5,"
+        "\"freshness\":\"cached\"},"
+        "\"leave\":{\"target_at\":\"2026-07-14T19:00:00+08:00\","
+        "\"is_past\":false,\"temp_c\":27,\"icon\":\"100\",\"text\":\"晴\","
+        "\"pop\":0,\"precip_mm\":0,\"freshness\":\"fresh\"},"
+        "\"next_outing\":{\"slot\":\"leave\","
+        "\"target_at\":\"2026-07-14T19:00:00+08:00\","
+        "\"umbrella_required\":true,\"confidence\":\"high\",\"reason\":\"%s\"},"
+        "\"updated_at\":\"2026-07-14T14:33:00+08:00\"}}}",
+        location, weather_text, reason);
+    assert(weather_length > 0 && (size_t)weather_length < sizeof(weather_patch));
+    assert(beacon_protocol_decode(weather_patch, (size_t)weather_length, &message));
+    assert(strcmp(message.state.weather.location, "杭杭杭杭杭") == 0);
+    assert(strcmp(message.state.weather.current.text, "雨雨雨雨雨") == 0);
+    assert(strcmp(message.state.weather.lunch.text, "12345678901234") == 0);
+    assert(strcmp(message.state.weather.next_outing.reason,
+                  "湿湿湿湿湿湿湿湿湿湿湿") == 0);
+}
+
 static void test_invalid_messages(void)
 {
     beacon_protocol_message_t message;
@@ -134,6 +208,7 @@ int main(void)
 {
     test_valid_notification();
     test_valid_snapshot_and_patch();
+    test_display_strings_truncate_at_utf8_boundaries();
     test_invalid_messages();
     return 0;
 }

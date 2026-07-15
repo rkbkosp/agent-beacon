@@ -73,6 +73,30 @@ static bool copy_item_string(const cJSON *item, char *destination, size_t destin
     return true;
 }
 
+static bool copy_item_display_string(const cJSON *item, char *destination,
+                                     size_t destination_size)
+{
+    if (!cJSON_IsString(item) || item->valuestring == NULL || destination_size == 0U) {
+        return false;
+    }
+    const size_t source_length = strlen(item->valuestring);
+    if (!valid_utf8((const unsigned char *)item->valuestring, source_length)) {
+        return false;
+    }
+
+    size_t copy_length = source_length;
+    if (copy_length >= destination_size) {
+        copy_length = destination_size - 1U;
+        while (copy_length > 0U &&
+               (((unsigned char)item->valuestring[copy_length] & 0xc0U) == 0x80U)) {
+            copy_length--;
+        }
+    }
+    memcpy(destination, item->valuestring, copy_length);
+    destination[copy_length] = '\0';
+    return true;
+}
+
 static bool copy_json_string(const cJSON *object, const char *name,
                              char *destination, size_t destination_size,
                              bool required)
@@ -83,6 +107,18 @@ static bool copy_json_string(const cJSON *object, const char *name,
         return true;
     }
     return copy_item_string(item, destination, destination_size);
+}
+
+static bool copy_json_display_string(const cJSON *object, const char *name,
+                                     char *destination, size_t destination_size,
+                                     bool required)
+{
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(object, name);
+    if (item == NULL && !required) {
+        destination[0] = '\0';
+        return true;
+    }
+    return copy_item_display_string(item, destination, destination_size);
 }
 
 static bool integer_in_range(const cJSON *item, int minimum, int maximum, int *value)
@@ -165,9 +201,9 @@ static bool parse_notification(const cJSON *root, beacon_protocol_message_t *mes
         !copy_json_string(payload, "dedupe_key", notification->dedupe_key, sizeof(notification->dedupe_key), true) ||
         !copy_json_string(payload, "supersede_key", notification->supersede_key, sizeof(notification->supersede_key), false) ||
         !copy_json_string(payload, "group_key", notification->group_key, sizeof(notification->group_key), false) ||
-        !copy_json_string(payload, "title", notification->title, sizeof(notification->title), true) ||
-        !copy_json_string(payload, "detail", notification->detail, sizeof(notification->detail), false) ||
-        !copy_json_string(payload, "source_label", notification->source_label, sizeof(notification->source_label), false)) {
+        !copy_json_display_string(payload, "title", notification->title, sizeof(notification->title), true) ||
+        !copy_json_display_string(payload, "detail", notification->detail, sizeof(notification->detail), false) ||
+        !copy_json_display_string(payload, "source_label", notification->source_label, sizeof(notification->source_label), false)) {
         return false;
     }
     const size_t category_length = strlen(category->valuestring);
@@ -215,7 +251,7 @@ static bool parse_codex_home(const cJSON *object, beacon_codex_home_t *home)
     const cJSON *card_expiry = cJSON_GetObjectItemCaseSensitive(object, "nearest_reset_card_expires_at");
     if (!cJSON_IsObject(object) ||
         !copy_json_string(object, "id", home->id, sizeof(home->id), true) ||
-        !copy_json_string(object, "label", home->label, sizeof(home->label), true) ||
+        !copy_json_display_string(object, "label", home->label, sizeof(home->label), true) ||
         !integer_in_range(cJSON_GetObjectItemCaseSensitive(object, "weekly_remaining_percent"), 0, 100, &percent) ||
         !parse_freshness_item(cJSON_GetObjectItemCaseSensitive(object, "freshness"), &home->freshness) ||
         !cJSON_IsString(cJSON_GetObjectItemCaseSensitive(object, "updated_at"))) {
@@ -384,12 +420,12 @@ static bool parse_agents(const cJSON *object, beacon_agents_state_t *agents)
             .revision = (uint64_t)revision->valuedouble,
         };
         if (!copy_json_string(item, "pane_id", candidate.pane_id, sizeof(candidate.pane_id), true) ||
-            !copy_json_string(item, "display_name", candidate.display_name, sizeof(candidate.display_name), true)) {
+            !copy_json_display_string(item, "display_name", candidate.display_name, sizeof(candidate.display_name), true)) {
             return false;
         }
-        if (!copy_json_string(item, "custom_status", candidate.secondary, sizeof(candidate.secondary), false) ||
+        if (!copy_json_display_string(item, "custom_status", candidate.secondary, sizeof(candidate.secondary), false) ||
             candidate.secondary[0] == '\0') {
-            if (!copy_json_string(item, "title", candidate.secondary, sizeof(candidate.secondary), false)) {
+            if (!copy_json_display_string(item, "title", candidate.secondary, sizeof(candidate.secondary), false)) {
                 return false;
             }
         }
@@ -412,7 +448,7 @@ static bool parse_weather_current(const cJSON *object, beacon_weather_current_t 
            integer_in_range(cJSON_GetObjectItemCaseSensitive(object, "temp_c"), -80, 80, &temp) &&
            (current->temp_c = (int16_t)temp, true) &&
            copy_json_string(object, "icon", current->icon, sizeof(current->icon), true) &&
-           copy_json_string(object, "text", current->text, sizeof(current->text), true) &&
+           copy_json_display_string(object, "text", current->text, sizeof(current->text), true) &&
            cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(object, "precip_mm")) &&
            parse_freshness_item(cJSON_GetObjectItemCaseSensitive(object, "freshness"),
                                 &current->freshness);
@@ -432,7 +468,7 @@ static bool parse_weather_slot(const cJSON *object, const char *label,
            integer_in_range(cJSON_GetObjectItemCaseSensitive(object, "temp_c"), -80, 80, &temp) &&
            (slot->temp_c = (int16_t)temp, true) &&
            cJSON_IsString(cJSON_GetObjectItemCaseSensitive(object, "icon")) &&
-           copy_json_string(object, "text", slot->text, sizeof(slot->text), true) &&
+           copy_json_display_string(object, "text", slot->text, sizeof(slot->text), true) &&
            integer_in_range(cJSON_GetObjectItemCaseSensitive(object, "pop"), 0, 100, &pop) &&
            cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(object, "precip_mm")) &&
            parse_freshness_item(cJSON_GetObjectItemCaseSensitive(object, "freshness"),
@@ -444,7 +480,7 @@ static bool parse_weather(const cJSON *object, beacon_weather_state_t *weather)
     char provider[16];
     const cJSON *outing = cJSON_GetObjectItemCaseSensitive(object, "next_outing");
     if (!cJSON_IsObject(object) ||
-        !copy_json_string(object, "location", weather->location, sizeof(weather->location), true) ||
+        !copy_json_display_string(object, "location", weather->location, sizeof(weather->location), true) ||
         !copy_json_string(object, "provider", provider, sizeof(provider), true) ||
         strcmp(provider, "qweather") != 0 ||
         !parse_weather_current(cJSON_GetObjectItemCaseSensitive(object, "current"), &weather->current) ||
@@ -452,7 +488,7 @@ static bool parse_weather(const cJSON *object, beacon_weather_state_t *weather)
         !parse_weather_slot(cJSON_GetObjectItemCaseSensitive(object, "leave"), "下班", &weather->leave) ||
         !cJSON_IsObject(outing) ||
         !copy_json_string(outing, "slot", weather->next_outing.slot, sizeof(weather->next_outing.slot), true) ||
-        !copy_json_string(outing, "reason", weather->next_outing.reason, sizeof(weather->next_outing.reason), true) ||
+        !copy_json_display_string(outing, "reason", weather->next_outing.reason, sizeof(weather->next_outing.reason), true) ||
         !cJSON_IsString(cJSON_GetObjectItemCaseSensitive(outing, "confidence")) ||
         !cJSON_IsString(cJSON_GetObjectItemCaseSensitive(object, "updated_at"))) {
         return false;
