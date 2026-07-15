@@ -16,7 +16,28 @@ uint32_t beacon_ui_page_interval_ms(beacon_page_t page)
     }
 }
 
-bool beacon_ui_page_affected_by_domains(beacon_page_t page, uint8_t domains)
+bool beacon_ui_connection_snapshot_ready(bool was_ready, bool transport_connected,
+                                         bool snapshot_received)
+{
+    return transport_connected && (was_ready || snapshot_received);
+}
+
+bool beacon_ui_connection_is_online(bool bridge_online, bool transport_connected,
+                                    bool snapshot_ready)
+{
+    return bridge_online && transport_connected && snapshot_ready;
+}
+
+bool beacon_ui_system_status_changed(const beacon_system_state_t *current,
+                                     const beacon_system_state_t *incoming)
+{
+    return current != NULL && incoming != NULL &&
+           (current->bridge_online != incoming->bridge_online ||
+            current->overall_freshness != incoming->overall_freshness);
+}
+
+bool beacon_ui_page_affected_by_domains(beacon_page_t page, uint8_t domains,
+                                        bool system_status_changed)
 {
     uint8_t page_domain;
     switch (page) {
@@ -33,8 +54,13 @@ bool beacon_ui_page_affected_by_domains(beacon_page_t page, uint8_t domains)
         return false;
     }
 
-    // Connection/freshness status appears in every carousel page header.
-    return (domains & (page_domain | BEACON_STATE_DOMAIN_SYSTEM)) != 0U;
+    if ((domains & page_domain) != 0U) {
+        return true;
+    }
+
+    // Connection/freshness status appears in every carousel page header, but
+    // provider patches may carry an unchanged system object.
+    return system_status_changed && (domains & BEACON_STATE_DOMAIN_SYSTEM) != 0U;
 }
 
 static beacon_page_t next_page(beacon_page_t page)

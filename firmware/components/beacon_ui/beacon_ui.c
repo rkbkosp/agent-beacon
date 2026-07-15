@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "beacon_fonts.h"
+#include "beacon_network.h"
 #include "beacon_ui_model.h"
 #include "board_ws_147b.h"
 #include "board_ws_147b_geometry.h"
@@ -25,6 +26,7 @@ static lv_color_t *draw_buffer_2;
 static esp_timer_handle_t tick_timer;
 static lv_obj_t *screen;
 static beacon_app_state_t app_state;
+static bool connection_snapshot_ready;
 
 #define FONT_BODY_14 beacon_font_medium_14()
 #define FONT_BODY_18 beacon_font_medium_18()
@@ -124,7 +126,9 @@ static void create_header(const char *title, const char *suffix)
 
 static const char *connection_suffix(void)
 {
-    if (!app_state.system.bridge_online) {
+    if (!beacon_ui_connection_is_online(app_state.system.bridge_online,
+                                        beacon_network_is_connected(),
+                                        connection_snapshot_ready)) {
         return "○ 离线";
     }
     if (app_state.system.overall_freshness == BEACON_FRESHNESS_STALE) {
@@ -390,6 +394,11 @@ void beacon_ui_set_app_state(const beacon_app_state_t *state)
     if (state != NULL) {
         app_state = *state;
     }
+}
+
+void beacon_ui_set_connection_snapshot_ready(bool ready)
+{
+    connection_snapshot_ready = ready;
 }
 
 static bool render_page(beacon_page_t page)

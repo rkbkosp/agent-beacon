@@ -32,6 +32,8 @@ static beacon_notification_transition_t expired_transition;
 static beacon_notification_transition_t replay_transition;
 static beacon_notification_transition_t completed_transition;
 static beacon_notification_transition_t offer_transition;
+static bool last_transport_connected;
+static bool connection_snapshot_ready;
 
 static int64_t wall_clock_ms(void)
 {
@@ -92,17 +94,49 @@ static void show_current_surface(const beacon_ui_state_t *ui_state)
     }
 }
 
+static void refresh_current_surface(const beacon_ui_state_t *ui_state)
+{
+    if (ui_state->mode == BEACON_UI_DIAGNOSTICS) {
+        beacon_ui_show_diagnostics();
+    } else if (ui_state->mode == BEACON_UI_CAROUSEL) {
+        beacon_ui_refresh_page(ui_state->page);
+    }
+}
+
+static void refresh_on_transport_change(const beacon_ui_state_t *ui_state)
+{
+    const bool transport_connected = beacon_network_is_connected();
+    if (transport_connected == last_transport_connected) {
+        return;
+    }
+    last_transport_connected = transport_connected;
+    connection_snapshot_ready = beacon_ui_connection_snapshot_ready(
+        connection_snapshot_ready, transport_connected, false);
+    beacon_ui_set_connection_snapshot_ready(connection_snapshot_ready);
+    refresh_current_surface(ui_state);
+    ESP_LOGI(TAG, "Protocol transport %s; refreshed local connection status",
+             transport_connected ? "connected" : "disconnected");
+}
+
 static void apply_protocol_state(const beacon_protocol_message_t *message,
                                  const beacon_ui_state_t *ui_state)
 {
+    const bool system_status_changed =
+        (message->state_domains & BEACON_STATE_DOMAIN_SYSTEM) != 0U &&
+        beacon_ui_system_status_changed(&app_state.system, &message->state.system);
     beacon_app_state_apply(&app_state, &message->state, message->state_domains,
                            message->revision);
+    connection_snapshot_ready = beacon_ui_connection_snapshot_ready(
+        connection_snapshot_ready, beacon_network_is_connected(),
+        message->type == BEACON_PROTOCOL_MESSAGE_SNAPSHOT);
     beacon_ui_set_app_state(&app_state);
+    beacon_ui_set_connection_snapshot_ready(connection_snapshot_ready);
     if (ui_state->mode == BEACON_UI_DIAGNOSTICS) {
         beacon_ui_show_diagnostics();
     } else if (ui_state->mode == BEACON_UI_CAROUSEL &&
                beacon_ui_page_affected_by_domains(ui_state->page,
-                                                  message->state_domains)) {
+                                                  message->state_domains,
+                                                  system_status_changed)) {
         beacon_ui_refresh_page(ui_state->page);
     }
     ESP_LOGI(TAG, "state type=%d domains=0x%02x revision=%llu", message->type,
@@ -153,6 +187,7 @@ void app_main(void)
     while (true) {
         beacon_ui_process();
         vTaskDelay(pdMS_TO_TICKS(10));
+        refresh_on_transport_change(&ui_state);
 
         const int64_t current_time_us = esp_timer_get_time();
         uint64_t elapsed_ms_64 = (uint64_t)(current_time_us - previous_time_us) / 1000U;

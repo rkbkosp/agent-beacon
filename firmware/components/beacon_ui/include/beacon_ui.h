@@ -7,6 +7,7 @@
 esp_err_t beacon_ui_init(void);
 void beacon_ui_process(void);
 void beacon_ui_set_app_state(const beacon_app_state_t *state);
+void beacon_ui_set_connection_snapshot_ready(bool ready);
 void beacon_ui_show_page(beacon_page_t page);
 void beacon_ui_refresh_page(beacon_page_t page);
 void beacon_ui_show_diagnostics(void);
