@@ -3,6 +3,7 @@
 
 #include "beacon_app_state.h"
 #include "beacon_button.h"
+#include "beacon_diagnostics.h"
 #include "beacon_network.h"
 #include "beacon_notifications.h"
 #include "beacon_protocol.h"
@@ -28,6 +29,7 @@ static beacon_app_state_t app_state;
 static beacon_protocol_message_t protocol_message;
 static beacon_ui_state_t ui_state;
 static beacon_button_t boot_button;
+static beacon_diagnostics_snapshot_t diagnostics_snapshot;
 static beacon_notification_transition_t expired_transition;
 static beacon_notification_transition_t replay_transition;
 static beacon_notification_transition_t completed_transition;
@@ -172,6 +174,7 @@ void app_main(void)
 {
     ESP_ERROR_CHECK(board_init());
     ESP_ERROR_CHECK(beacon_ui_init());
+    beacon_diagnostics_init();
 
     beacon_ui_state_init(&ui_state);
     beacon_button_init(&boot_button, 30, 350, 2000, 5000);
@@ -182,6 +185,7 @@ void app_main(void)
     start_network_if_configured();
 
     int64_t previous_time_us = esp_timer_get_time();
+    int64_t previous_diagnostics_sample_us = previous_time_us;
     ESP_LOGI(TAG, "M2 v2 UI ready: Codex / Agents / Weather");
 
     while (true) {
@@ -196,6 +200,15 @@ void app_main(void)
             elapsed_ms_64 = 1U;
         }
         const uint32_t elapsed_ms = elapsed_ms_64 > UINT32_MAX ? UINT32_MAX : (uint32_t)elapsed_ms_64;
+
+        if (current_time_us - previous_diagnostics_sample_us >= 1000000LL) {
+            beacon_diagnostics_sample(&diagnostics_snapshot);
+            beacon_ui_set_diagnostics(&diagnostics_snapshot);
+            previous_diagnostics_sample_us = current_time_us;
+            if (ui_state.mode == BEACON_UI_DIAGNOSTICS) {
+                beacon_ui_show_diagnostics();
+            }
+        }
 
         while (beacon_protocol_receive(&protocol_message, 0)) {
             if (protocol_message.type == BEACON_PROTOCOL_MESSAGE_SNAPSHOT ||

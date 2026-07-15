@@ -160,8 +160,9 @@ weather-lunch-umbrella    weather-leave-umbrella  weather-stale
 bridge-offline
 ```
 
-BOOT：短按下一页，双击重播最近未过期通知，长按 2 秒进入或退出诊断页。长按
-5 秒的配网手势已识别，SoftAP 配网页属于正式 MVP 后续工作。
+BOOT：短按下一页，双击重播最近未过期通知，长按 2 秒进入或退出诊断页。诊断页
+会按 1 秒刷新 SoC 芯片温度和双核综合 CPU 占用率。长按 5 秒的配网手势已识别，
+SoftAP 配网页属于正式 MVP 后续工作。
 
 硬件记录与验收证据见 `docs/bringup.md` 和 `docs/test-report.md`。
 

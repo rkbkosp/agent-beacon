@@ -93,6 +93,7 @@ test:
 	@./tests/scripts/test_install_fonts.sh
 	@./tests/firmware/test_calibration.sh
 	@./tests/firmware/test_board_geometry.sh
+	@./tests/firmware/test_diagnostics.sh
 	@./tests/firmware/test_ui_state.sh
 	@./tests/firmware/test_input.sh
 	@./tests/firmware/test_ui_model.sh

@@ -26,6 +26,7 @@ static lv_color_t *draw_buffer_2;
 static esp_timer_handle_t tick_timer;
 static lv_obj_t *screen;
 static beacon_app_state_t app_state;
+static beacon_diagnostics_snapshot_t diagnostics_snapshot;
 static bool connection_snapshot_ready;
 
 #define FONT_BODY_14 beacon_font_medium_14()
@@ -396,6 +397,13 @@ void beacon_ui_set_app_state(const beacon_app_state_t *state)
     }
 }
 
+void beacon_ui_set_diagnostics(const beacon_diagnostics_snapshot_t *snapshot)
+{
+    if (snapshot != NULL) {
+        diagnostics_snapshot = *snapshot;
+    }
+}
+
 void beacon_ui_set_connection_snapshot_ready(bool ready)
 {
     connection_snapshot_ready = ready;
@@ -456,11 +464,28 @@ void beacon_ui_show_diagnostics(void)
                 (unsigned long long)app_state.system.revision);
     set_text(create_label(10, 31, 300, 18, FONT_BODY_14, LV_TEXT_ALIGN_LEFT,
                           COLOR_FOREGROUND), line);
-    set_text(create_label(10, 57, 300, 18, FONT_BODY_14, LV_TEXT_ALIGN_LEFT,
+    char temperature[16] = "--";
+    char cpu_usage[8] = "--";
+    if (diagnostics_snapshot.soc_temperature_available) {
+        const int temperature_tenths = diagnostics_snapshot.soc_temperature_tenths_c;
+        const unsigned int magnitude =
+            (unsigned int)(temperature_tenths < 0 ? -temperature_tenths : temperature_tenths);
+        lv_snprintf(temperature, sizeof(temperature), "%s%u.%u°C",
+                    temperature_tenths < 0 ? "-" : "", magnitude / 10U,
+                    magnitude % 10U);
+    }
+    if (diagnostics_snapshot.cpu_usage_available) {
+        lv_snprintf(cpu_usage, sizeof(cpu_usage), "%u%%",
+                    diagnostics_snapshot.cpu_usage_percent);
+    }
+    lv_snprintf(line, sizeof(line), "SoC %s · CPU %s", temperature, cpu_usage);
+    set_text(create_label(10, 56, 300, 18, FONT_HEADING_14, LV_TEXT_ALIGN_LEFT,
+                          COLOR_FOREGROUND), line);
+    set_text(create_label(10, 81, 300, 18, FONT_BODY_14, LV_TEXT_ALIGN_LEFT,
                           COLOR_MUTED), "网络 / WS / 堆 / PSRAM");
-    set_text(create_label(10, 83, 300, 18, FONT_BODY_14, LV_TEXT_ALIGN_LEFT,
+    set_text(create_label(10, 106, 300, 18, FONT_BODY_14, LV_TEXT_ALIGN_LEFT,
                           COLOR_MUTED), "CODEX 主/副 · HERDR · 和风天气");
-    set_text(create_label(10, 138, 300, 18, FONT_BODY_14, LV_TEXT_ALIGN_CENTER,
+    set_text(create_label(10, 145, 300, 18, FONT_BODY_14, LV_TEXT_ALIGN_CENTER,
                           COLOR_MUTED), "长按 BOOT 退出");
 }
 

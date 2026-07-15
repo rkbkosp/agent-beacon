@@ -866,6 +866,8 @@ Protocol version
 Wi-Fi RSSI
 WebSocket state
 Snapshot revision
+SoC temperature
+CPU usage (one-second window, aggregate across both cores)
 Codex MAIN/VS freshness
 Relay freshness
 Herdr version/socket state
