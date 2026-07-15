@@ -1,7 +1,6 @@
 package qweather
 
 import (
-	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,7 +16,7 @@ type UmbrellaDecision struct {
 }
 
 func DecideUmbrella(points []HourlyPoint, target time.Time, weather config.WeatherUmbrellaConfig, stale bool) UmbrellaDecision {
-	unknown := UmbrellaDecision{Confidence: "unknown", Reason: "天气数据暂不可用"}
+	unknown := UmbrellaDecision{Confidence: "unknown", Reason: "数据不足"}
 	if stale {
 		return unknown
 	}
@@ -43,12 +42,7 @@ func DecideUmbrella(points []HourlyPoint, target time.Time, weather config.Weath
 		}
 		if (point.Precip != nil && *point.Precip > 0) || wetIcon(point.Icon) || wetText(point.Text) {
 			required := true
-			reasonText := "降水"
-			if wetText(point.Text) {
-				reasonText = point.Text
-			}
-			return UmbrellaDecision{Required: &required, Confidence: "high",
-				Reason: fmt.Sprintf("%s 前后有%s", target.Format("15:04"), reasonText)}
+			return UmbrellaDecision{Required: &required, Confidence: "high", Reason: "有雨"}
 		}
 		if point.POP != nil && *point.POP > maxPOP {
 			maxPOP = *point.POP
@@ -59,12 +53,24 @@ func DecideUmbrella(points []HourlyPoint, target time.Time, weather config.Weath
 	}
 	if maxPOP >= weather.POPThreshold {
 		required := true
-		return UmbrellaDecision{Required: &required, Confidence: "medium",
-			Reason: fmt.Sprintf("%s 降水概率 %d%%", target.Format("15:04"), maxPOP)}
+		return UmbrellaDecision{Required: &required, Confidence: "medium", Reason: "有雨"}
 	}
 	required := false
-	return UmbrellaDecision{Required: &required, Confidence: "high",
-		Reason: fmt.Sprintf("%s 前后暂未见降水", target.Format("15:04"))}
+	return UmbrellaDecision{Required: &required, Confidence: "high", Reason: "无雨"}
+}
+
+func CombineUmbrellaDecision(rain UmbrellaDecision, sunshade SunshadeDecision) UmbrellaDecision {
+	if rain.Required != nil && *rain.Required {
+		return rain
+	}
+	if sunshade.Available && sunshade.Required {
+		required := true
+		return UmbrellaDecision{Required: &required, Confidence: sunshade.Confidence, Reason: "遮阳"}
+	}
+	if rain.Required == nil {
+		return UmbrellaDecision{Confidence: "unknown", Reason: "数据不足"}
+	}
+	return rain
 }
 
 func wetIcon(raw string) bool {

@@ -1,8 +1,8 @@
 # Agent Beacon Weather Provider — weather.md
 
 > 本文是 Agent Beacon 天气模块的唯一实现规格。
-> 数据源：和风天气（QWeather）API v7。
-> 当前范围：实时天气、12:00 午饭天气、19:00 下班天气、下一次出门窗口的带伞判断及通知。
+> 数据源：和风天气（QWeather）API v7 + Open-Meteo Satellite Radiation API。
+> 当前范围：实时天气、12:00 午饭天气、19:00 下班天气、降雨/太阳直晒联合带伞判断及通知。
 
 ---
 
@@ -41,6 +41,7 @@ GET /v7/weather/72h
 - 错误码：<https://dev.qweather.com/docs/resource/error-code/>
 - 缓存建议：<https://dev.qweather.com/docs/best-practices/cache/>
 - 来源标识：<https://dev.qweather.com/docs/terms/attribution/>
+- Open-Meteo 卫星辐射 API：<https://open-meteo.com/en/docs/satellite-radiation-api>
 
 不得使用旧公共 Host：
 
@@ -160,6 +161,20 @@ providers:
       window_after: 60m
       pop_threshold: 40
       repeat_before_outing: 30m
+
+    satellite_radiation:
+      enabled: true
+      latitude: 30.2163
+      longitude: 120.1734
+      lunch_refresh: "11:57"
+      leave_refresh: "18:28"
+      stale_after: 75m
+      direct_required: 300
+      ghi_required: 550
+      required_direct_share: 0.35
+      direct_suggested: 150
+      ghi_suggested: 400
+      suggested_direct_share: 0.25
 ```
 
 配置校验失败时，Weather Provider 必须保持禁用并给出可行动错误，不得阻止 Codex、Herdr 和设备连接模块启动。
@@ -395,7 +410,35 @@ refer.sources
 refer.license
 ```
 
-### 5.3 Go HTTP 客户端要求
+### 5.3 Open-Meteo 卫星辐射
+
+杭州使用 Himawari 原生 10 分钟辐射产品。请求固定为：
+
+```http
+GET https://satellite-api.open-meteo.com/v1/archive
+  ?latitude=30.2163
+  &longitude=120.1734
+  &hourly=shortwave_radiation_instant,direct_radiation_instant,diffuse_radiation_instant,direct_normal_irradiance_instant,terrestrial_radiation_instant
+  &timezone=Asia/Shanghai
+  &temporal_resolution=native
+  &models=satellite_radiation_seamless
+  &forecast_days=1
+```
+
+`temporal_resolution=native` 不得省略，否则会被聚合为小时数据。响应使用
+`hourly.time` 和同长度数值数组，末尾尚未生成的点允许为 `null`。解析时从后向前
+找到最近 3 个 GHI/Direct 均非空的点，分别取中位数：
+
+```text
+GHI         = median(shortwave_radiation_instant)
+Direct      = median(direct_radiation_instant)
+DirectShare = Direct / GHI
+```
+
+最近有效点超过 75 分钟时，不得用该批数据作遮阳判断。Himawari 的直射/散射值由
+Open-Meteo 根据总短波辐射分离估算，不应描述成卫星独立实测量。
+
+### 5.4 Go HTTP 客户端要求
 
 - 使用共享 `http.Client`；
 - 总超时默认 8 秒；
@@ -559,7 +602,7 @@ Weather Provider 向桥接状态层输出：
     "target_at": "2026-07-14T12:00:00+08:00",
     "umbrella": "required",
     "confidence": "high",
-    "reason": "12:00 前后有阵雨"
+    "reason": "有雨"
   },
   "source": {
     "label": "QWeather",
@@ -635,16 +678,36 @@ unknown:
 
 ### 9.3 reason
 
-生成适合小屏的短句，优先级：
+推荐条固定输出：
 
 ```text
-“19:00 前后有中雨”
-“12:00 降水概率 60%”
-“下班窗口可能有雨”
-“天气数据暂不可用”
+时段·需要/无需带伞·原因
 ```
 
-不要显示内部规则、图标码或原始 JSON。
+原因使用短枚举：
+
+```text
+有雨      QWeather 窗口内发现降水、湿性图标/文字或 POP 达阈值
+遮阳      未判定有雨，但卫星辐射达到遮阳阈值
+无雨      QWeather 窗口判断无需雨伞，卫星也未要求遮阳或尚未到定时取数点
+数据不足  降雨判断未知，且没有可靠的遮阳 required 结论
+```
+
+判定优先级为“有雨 > 遮阳 > 无雨/未知”。即使降雨数据 stale，只要新鲜卫星数据
+明确要求遮阳，仍可输出 `需要带伞·遮阳`；但卫星显示无需遮阳不能把未知降雨降级为
+`无需带伞`。
+
+遮阳阈值：
+
+| 条件 | 结论 | confidence |
+|---|---|---|
+| `Direct >= 300` | 需要带伞·遮阳 | high |
+| `GHI >= 550 && DirectShare >= 0.35` | 需要带伞·遮阳 | high |
+| `Direct >= 150` | 需要带伞·遮阳 | medium |
+| `GHI >= 400 && DirectShare >= 0.25` | 需要带伞·遮阳 | medium |
+| 其余新鲜辐射 | 不因遮阳要求带伞 | high |
+
+不要显示内部规则、图标码、W/m² 数值或原始 JSON。
 
 ---
 
@@ -665,7 +728,7 @@ weather.umbrella_required
 紧急度：attention
 优先级：72
 标题：午饭记得带伞 / 下班记得带伞
-详情：12:00 前后有阵雨
+详情：有雨 / 遮阳
 ```
 
 触发：
@@ -724,6 +787,7 @@ weather.data_stale
 ```text
 /v7/weather/now：每 10 分钟
 /v7/weather/24h：每 30 分钟
+Open-Meteo 卫星辐射：仅在 CST 11:57、18:28 各请求一次
 ```
 
 额外刷新：
@@ -731,6 +795,7 @@ weather.data_stale
 ```text
 Provider 启动时
 每天 CST 11:55、18:20（同时强制刷新实况和逐小时预报）
+每天 CST 11:57（午饭遮阳）和 18:28（下班遮阳）分别刷新一次卫星辐射
 日期/目标出门窗口变化时
 目标前 60 分钟
 目标前 30 分钟
@@ -750,6 +815,8 @@ Provider 启动时
 provider
 endpoint
 location
+slot
+target_at
 fetched_at
 update_time
 payload_json
@@ -820,13 +887,17 @@ agent-beacon-bridge weather cache clear
 
 ## 13. 来源标识
 
-天气页面必须清晰显示：
+天气页面标题继续标识当前实况/预报来源：
 
 ```text
 QWeather
 ```
 
 Mac 端状态页、README 或诊断页面提供指向和风天气官网的可点击来源链接。
+
+遮阳通知使用 `source=open-meteo`、`source_label=Open-Meteo`；README 和本规格提供
+Open-Meteo 官方链接。卫星原始响应只进入权限为 `0600` 的本地 weather cache，
+不下发给 ESP32。
 
 同时保存响应中的：
 
@@ -847,6 +918,7 @@ refer.license
 agent-beacon-bridge weather doctor
 agent-beacon-bridge weather fetch-now
 agent-beacon-bridge weather fetch-hourly
+agent-beacon-bridge weather fetch-radiation
 agent-beacon-bridge weather snapshot
 agent-beacon-bridge weather refresh
 agent-beacon-bridge weather cache clear
@@ -910,6 +982,9 @@ agent-beacon-bridge weather cache clear
 - 5xx 保留 last-good；
 - 超大响应被拒绝；
 - 字符串数字解析失败。
+- Open-Meteo 请求包含 `temporal_resolution=native` 和完整 5 个辐射字段；
+- 尾部 `null` 跳过，最近 3 个完整点取中位数；
+- 少于 3 个完整点拒绝替换 last-good。
 
 ### 时间
 
@@ -935,6 +1010,10 @@ agent-beacon-bridge weather cache clear
 - false/unknown -> true 触发通知；
 - 同一窗口去重；
 - 目标前 30 分钟最多重播一次。
+- 卫星强直射输出 `需要带伞·遮阳`；
+- 降雨与强直射并存时原因优先为 `有雨`；
+- 卫星观测超过 75 分钟不参与判断；
+- CST 11:57、18:28 定时点和跨日计算正确。
 
 ---
 
@@ -956,6 +1035,8 @@ agent-beacon-bridge weather cache clear
 - [ ] 需要带伞时推荐区使用放大的红色提醒；
 - [ ] 下一出门窗口选择正确；
 - [ ] 带伞判断可解释；
+- [ ] 推荐条使用“时段·需要/无需带伞·原因”格式；
+- [ ] Open-Meteo 使用 native 时间分辨率并在 11:57/18:28 各获取一次；
 - [ ] 首次需要带伞显示红色全屏通知；
 - [ ] 30 分钟前最多再提醒一次；
 - [ ] API 故障时保留最后成功数据；

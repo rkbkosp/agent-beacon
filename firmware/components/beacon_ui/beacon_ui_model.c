@@ -2,6 +2,8 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
+#include <string.h>
 
 static const beacon_page_content_t PAGES[BEACON_PAGE_COUNT] = {
     [BEACON_PAGE_CODEX] = {.title = "CODEX 配额"},
@@ -41,4 +43,30 @@ const beacon_app_state_t *beacon_ui_default_app_state(void)
         initialized = true;
     }
     return &state;
+}
+
+void beacon_ui_format_weather_recommendation(const beacon_weather_state_t *weather,
+                                             char *output, size_t output_size)
+{
+    if (output == NULL || output_size == 0U) {
+        return;
+    }
+    output[0] = '\0';
+    if (weather == NULL) {
+        return;
+    }
+    const char *label = "出门";
+    if (strcmp(weather->next_outing.slot, "lunch") == 0) {
+        label = weather->lunch.label[0] != '\0' ? weather->lunch.label : "午饭";
+    } else if (strcmp(weather->next_outing.slot, "leave") == 0) {
+        label = weather->leave.label[0] != '\0' ? weather->leave.label : "下班";
+    }
+    const char *decision = "判断未知";
+    if (weather->next_outing.umbrella_known) {
+        decision = weather->next_outing.umbrella_required ? "需要带伞" : "无需带伞";
+    }
+    const char *reason = weather->next_outing.reason[0] != '\0'
+                             ? weather->next_outing.reason
+                             : "数据不足";
+    snprintf(output, output_size, "%s·%s·%s", label, decision, reason);
 }

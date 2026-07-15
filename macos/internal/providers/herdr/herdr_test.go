@@ -83,6 +83,27 @@ func TestTransitionNotificationsUseRealHerdrStateChanges(t *testing.T) {
 	}
 }
 
+func TestTransitionNotificationsDistinguishRepeatedEpisodesWithoutHerdrRevision(t *testing.T) {
+	firstAt := time.Date(2026, time.July, 15, 11, 15, 50, 0, time.Local)
+	working := protocol.AgentsState{Provider: "herdr", Connected: true, Items: []protocol.AgentItem{
+		{PaneID: "p1", DisplayName: "Review", Status: protocol.AgentWorking, Revision: 0,
+			AgentSession: &protocol.AgentSession{Source: "herdr:codex", Kind: "id", Value: "session-1"}},
+	}}
+	blocked := protocol.AgentsState{Provider: "herdr", Connected: true, Items: []protocol.AgentItem{
+		{PaneID: "p1", DisplayName: "Review", Status: protocol.AgentBlocked, Revision: 0,
+			AgentSession: &protocol.AgentSession{Source: "herdr:codex", Kind: "id", Value: "session-1"}},
+	}}
+
+	first := transitionNotifications(working, blocked, firstAt)
+	second := transitionNotifications(working, blocked, firstAt.Add(time.Second))
+	if len(first) != 1 || len(second) != 1 {
+		t.Fatalf("notification counts = %d, %d", len(first), len(second))
+	}
+	if first[0].DedupeKey == second[0].DedupeKey {
+		t.Fatalf("repeated blocked episodes shared dedupe key %q", first[0].DedupeKey)
+	}
+}
+
 func TestProviderSnapshotsSubscribesAndResyncsOnEvent(t *testing.T) {
 	tempDir, err := os.MkdirTemp("/tmp", "agent-beacon-herdr-")
 	if err != nil {

@@ -288,23 +288,11 @@ static void create_weather_slot(const beacon_weather_slot_t *slot, lv_coord_t x)
     create_weather_column(heading, slot->temp_c, slot->text, x, slot->is_past);
 }
 
-static const char *next_outing_label(const beacon_weather_state_t *weather)
-{
-    if (strcmp(weather->next_outing.slot, "lunch") == 0) {
-        return weather->lunch.label[0] != '\0' ? weather->lunch.label : "午饭";
-    }
-    if (strcmp(weather->next_outing.slot, "leave") == 0) {
-        return weather->leave.label[0] != '\0' ? weather->leave.label : "下班";
-    }
-    return "出门";
-}
-
 static void show_weather_page(void)
 {
     begin_screen(COLOR_BACKGROUND);
     char header[64];
     char recommendation[64];
-    const char *outing_label = next_outing_label(&app_state.weather);
     const lv_font_t *recommendation_font = FONT_HEADING_18;
     uint32_t recommendation_color = COLOR_FOREGROUND;
     bool show_recommendation_background = true;
@@ -318,18 +306,17 @@ static void show_weather_page(void)
                           app_state.weather.current.freshness == BEACON_FRESHNESS_STALE);
     create_weather_slot(&app_state.weather.lunch, 112);
     create_weather_slot(&app_state.weather.leave, 216);
+    beacon_ui_format_weather_recommendation(&app_state.weather, recommendation,
+                                            sizeof(recommendation));
 
     uint32_t color = COLOR_YELLOW;
     if (!app_state.weather.next_outing.umbrella_known) {
         recommendation_color = COLOR_BACKGROUND;
-        lv_snprintf(recommendation, sizeof(recommendation), "%s · 判断未知", outing_label);
     } else if (app_state.weather.next_outing.umbrella_required) {
         color = COLOR_RED;
         recommendation_font = FONT_HEADING_24;
-        lv_snprintf(recommendation, sizeof(recommendation), "%s · 需要带伞", outing_label);
     } else {
         show_recommendation_background = false;
-        lv_snprintf(recommendation, sizeof(recommendation), "%s · 无需带伞", outing_label);
     }
     if (show_recommendation_background) {
         create_box(8, 113, 304, 54, color);

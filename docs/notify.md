@@ -400,15 +400,17 @@ quota:<home_id>:stale
 ### 6.3 文案
 
 ```text
-下次出门记得带伞
-19:00 · 小雨 70%
+下班记得带伞
+有雨
 
-午饭出门记得带伞
-12:00 · 阵雨 60%
+午饭记得带伞
+遮阳
 
-还有 30 分钟下班
-小雨 · 记得带伞
+下班记得带伞
+有雨
 ```
+
+降雨通知来源为 QWeather；遮阳通知来源为 Open-Meteo。
 
 数据 stale 时：
 
@@ -625,12 +627,15 @@ group_key      短时间聚合多个相似对象
 ### 9.2 典型键
 
 ```text
-agent:<pane_id>:<session>:blocked:<revision>
-agent:<pane_id>:<session>:done:<revision>
+agent:<pane_id>:<session>:blocked:<transition_revision>
+agent:<pane_id>:<session>:done:<transition_revision>
 quota:<home_id>:weekly:<window_id>:threshold:15
 weather:<location>:leave:<target_at>:umbrella
 system:provider:qweather:stale
 ```
+
+`transition_revision` 优先使用递增的 Herdr revision；Herdr 未提供可区分的
+revision 时，由 Mac Bridge 为每次真实状态转移生成本地标识。
 
 ### 9.3 recent_history
 

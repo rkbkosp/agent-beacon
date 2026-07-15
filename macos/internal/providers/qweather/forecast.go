@@ -107,6 +107,11 @@ func SelectForecast(points []HourlyPoint, target time.Time) (HourlyPoint, bool) 
 }
 
 func BuildWeatherState(now time.Time, weather config.WeatherConfig, current *NowData, hourly *HourlyData) (protocol.WeatherState, error) {
+	return BuildWeatherStateWithRadiation(now, weather, current, hourly, nil)
+}
+
+func BuildWeatherStateWithRadiation(now time.Time, weather config.WeatherConfig, current *NowData, hourly *HourlyData,
+	radiation map[string]*RadiationData) (protocol.WeatherState, error) {
 	targets, err := TargetsFor(now, weather.Timezone, weather.Schedule)
 	if err != nil {
 		return protocol.WeatherState{}, err
@@ -123,7 +128,7 @@ func BuildWeatherState(now time.Time, weather config.WeatherConfig, current *Now
 		Lunch:    unavailableSlot(targets.Lunch, !localNow.Before(targets.Lunch)),
 		Leave:    unavailableSlot(targets.Leave, !localNow.Before(targets.Leave)),
 		NextOuting: protocol.NextOuting{Slot: targets.NextSlot, TargetAt: targets.NextOuting,
-			Confidence: "unknown", Reason: "天气数据暂不可用"},
+			Confidence: "unknown", Reason: "数据不足"},
 		UpdatedAt: localNow,
 	}
 	if current != nil {
@@ -134,19 +139,31 @@ func BuildWeatherState(now time.Time, weather config.WeatherConfig, current *Now
 		}
 		state.UpdatedAt = current.FetchedAt
 	}
+	decision := UmbrellaDecision{Confidence: "unknown", Reason: "数据不足"}
 	if hourly != nil {
 		hourlyFreshness := dataFreshness(localNow, hourly.FetchedAt, weather.Cache.HourlyStaleAfter, hourly.FromCache)
 		state.Lunch = slotFromForecast(hourly.Points, targets.Lunch, !localNow.Before(targets.Lunch), hourlyFreshness)
 		state.Leave = slotFromForecast(hourly.Points, targets.Leave, !localNow.Before(targets.Leave), hourlyFreshness)
-		decision := DecideUmbrella(hourly.Points, targets.NextOuting, weather.Umbrella, hourlyFreshness == protocol.FreshnessStale)
-		state.NextOuting.UmbrellaRequired = decision.Required
-		state.NextOuting.Confidence = decision.Confidence
-		state.NextOuting.Reason = decision.Reason
+		decision = DecideUmbrella(hourly.Points, targets.NextOuting, weather.Umbrella, hourlyFreshness == protocol.FreshnessStale)
 		if hourly.FetchedAt.After(state.UpdatedAt) {
 			state.UpdatedAt = hourly.FetchedAt
 		}
 	}
+	if weather.Satellite.Enabled {
+		radiationData := radiation[radiationWindowKey(targets.NextOuting, targets.NextSlot)]
+		decision = CombineUmbrellaDecision(decision, DecideSunshade(radiationData, localNow, weather.Satellite))
+		if radiationData != nil && radiationData.FetchedAt.After(state.UpdatedAt) {
+			state.UpdatedAt = radiationData.FetchedAt
+		}
+	}
+	state.NextOuting.UmbrellaRequired = decision.Required
+	state.NextOuting.Confidence = decision.Confidence
+	state.NextOuting.Reason = decision.Reason
 	return state, nil
+}
+
+func radiationWindowKey(target time.Time, slot string) string {
+	return fmt.Sprintf("%s:%s", target.Format("2006-01-02"), slot)
 }
 
 func parseClock(raw string) (int, int, error) {

@@ -72,3 +72,16 @@ providers:
       window_after: 60m
       pop_threshold: 40
       repeat_before_outing: 30m
+    satellite_radiation:
+      enabled: true
+      latitude: 30.2163
+      longitude: 120.1734
+      lunch_refresh: "11:57"
+      leave_refresh: "18:28"
+      stale_after: 75m
+      direct_required: 300
+      ghi_required: 550
+      required_direct_share: 0.35
+      direct_suggested: 150
+      ghi_suggested: 400
+      suggested_direct_share: 0.25

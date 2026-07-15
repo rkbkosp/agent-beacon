@@ -18,6 +18,8 @@ type CacheRecord struct {
 	Provider    string          `json:"provider"`
 	Endpoint    string          `json:"endpoint"`
 	Location    string          `json:"location"`
+	Slot        string          `json:"slot,omitempty"`
+	TargetAt    *time.Time      `json:"target_at,omitempty"`
 	FetchedAt   time.Time       `json:"fetched_at"`
 	UpdateTime  string          `json:"update_time"`
 	PayloadJSON json.RawMessage `json:"payload_json"`
@@ -76,9 +78,13 @@ func (cache *FileCache) Load() ([]CacheRecord, error) {
 	if value.Version != 1 {
 		return nil, fmt.Errorf("unsupported qweather cache version %d", value.Version)
 	}
-	for _, record := range value.Records {
-		if err := validateCacheRecord(record); err != nil {
+	for index := range value.Records {
+		if err := validateCacheRecord(value.Records[index]); err != nil {
 			return nil, err
+		}
+		if value.Records[index].Provider == "qweather" {
+			value.Records[index].Slot = ""
+			value.Records[index].TargetAt = nil
 		}
 	}
 	return append([]CacheRecord(nil), value.Records...), nil
@@ -141,16 +147,25 @@ func (cache *FileCache) Clear() error {
 }
 
 func validateCacheRecord(record CacheRecord) error {
-	if record.Provider != "qweather" {
-		return errors.New("qweather cache record provider must be qweather")
-	}
-	switch record.Endpoint {
-	case "/v7/weather/now", "/v7/weather/24h", "/v7/weather/72h":
+	switch record.Provider {
+	case "qweather":
+		switch record.Endpoint {
+		case "/v7/weather/now", "/v7/weather/24h", "/v7/weather/72h":
+		default:
+			return fmt.Errorf("qweather cache record endpoint %q is invalid", record.Endpoint)
+		}
+	case "open-meteo":
+		if record.Endpoint != "/v1/archive" {
+			return fmt.Errorf("open-meteo cache record endpoint %q is invalid", record.Endpoint)
+		}
+		if (record.Slot != "lunch" && record.Slot != "leave") || record.TargetAt == nil || record.TargetAt.IsZero() {
+			return errors.New("open-meteo cache record slot and target_at are required")
+		}
 	default:
-		return fmt.Errorf("qweather cache record endpoint %q is invalid", record.Endpoint)
+		return fmt.Errorf("weather cache record provider %q is invalid", record.Provider)
 	}
 	if record.Location == "" || record.FetchedAt.IsZero() || !json.Valid(record.PayloadJSON) {
-		return errors.New("qweather cache record location, fetched_at, and valid payload_json are required")
+		return errors.New("weather cache record location, fetched_at, and valid payload_json are required")
 	}
 	return nil
 }

@@ -90,7 +90,7 @@ func DefaultSnapshot(now time.Time) protocol.Snapshot {
 			Current:    protocol.WeatherCurrent{ObservedAt: now, TempC: 31, Icon: "101", Text: "多云", Freshness: protocol.FreshnessFresh},
 			Lunch:      protocol.WeatherSlot{TargetAt: atHour(now, 12), IsPast: now.Hour() >= 12, TempC: 29, Icon: "305", Text: "小雨", POP: 60, PrecipMM: 0.5, Freshness: protocol.FreshnessCached},
 			Leave:      protocol.WeatherSlot{TargetAt: atHour(now, 19), IsPast: now.Hour() >= 19, TempC: 27, Icon: "305", Text: "小雨", POP: 70, PrecipMM: 0.7, Freshness: protocol.FreshnessFresh},
-			NextOuting: protocol.NextOuting{Slot: "leave", TargetAt: atHour(now, 19), UmbrellaRequired: &umbrella, Confidence: "high", Reason: "19:00 小雨，降水概率 70%"},
+			NextOuting: protocol.NextOuting{Slot: "leave", TargetAt: atHour(now, 19), UmbrellaRequired: &umbrella, Confidence: "high", Reason: "有雨"},
 			UpdatedAt:  now,
 		},
 		System: protocol.SystemState{BridgeOnline: true, OverallFreshness: protocol.FreshnessFresh},
@@ -136,27 +136,27 @@ func Build(name string, now time.Time) (Fixture, error) {
 	case "weather-no-umbrella":
 		value := false
 		base.Weather.NextOuting.UmbrellaRequired = &value
-		base.Weather.NextOuting.Reason = "下一出门时段无降雨"
+		base.Weather.NextOuting.Reason = "无雨"
 		base.Weather.Leave = protocol.WeatherSlot{TargetAt: atHour(now, 19), TempC: 28, Icon: "100", Text: "晴", POP: 10, Freshness: protocol.FreshnessFresh}
 		return Fixture{Patch: protocol.StatePatch{Weather: &base.Weather}}, nil
 	case "weather-lunch-umbrella":
 		base.Weather.NextOuting.Slot = "lunch"
 		base.Weather.NextOuting.TargetAt = atHour(now, 12)
-		base.Weather.NextOuting.Reason = "12:00 有阵雨，降水概率 60%"
+		base.Weather.NextOuting.Reason = "有雨"
 		return Fixture{Patch: protocol.StatePatch{Weather: &base.Weather}, Notification: notification(now,
 			protocol.CategoryWeather, "weather.umbrella_required", "qweather", "hangzhou:lunch", protocol.ThemeRed,
-			protocol.UrgencyAttention, 72, "weather:hangzhou:lunch:mock:umbrella", "需要带伞", "12:00 · 阵雨 60%", 6500, 60*time.Minute)}, nil
+			protocol.UrgencyAttention, 72, "weather:hangzhou:lunch:mock:umbrella", "午饭记得带伞", "有雨", 6500, 60*time.Minute)}, nil
 	case "weather-leave-umbrella":
 		return Fixture{Patch: protocol.StatePatch{Weather: &base.Weather}, Notification: notification(now,
 			protocol.CategoryWeather, "weather.umbrella_required", "qweather", "hangzhou:leave", protocol.ThemeRed,
-			protocol.UrgencyAttention, 72, "weather:hangzhou:leave:mock:umbrella", "需要带伞", "19:00 · 小雨 70%", 6500, 60*time.Minute)}, nil
+			protocol.UrgencyAttention, 72, "weather:hangzhou:leave:mock:umbrella", "下班记得带伞", "有雨", 6500, 60*time.Minute)}, nil
 	case "weather-stale":
 		base.Weather.Current.Freshness = protocol.FreshnessStale
 		base.Weather.Lunch.Freshness = protocol.FreshnessStale
 		base.Weather.Leave.Freshness = protocol.FreshnessStale
 		base.Weather.NextOuting.UmbrellaRequired = nil
 		base.Weather.NextOuting.Confidence = "unknown"
-		base.Weather.NextOuting.Reason = "天气数据不可用"
+		base.Weather.NextOuting.Reason = "数据不足"
 		return Fixture{Patch: protocol.StatePatch{Weather: &base.Weather}, Notification: notification(now,
 			protocol.CategorySystem, "system.weather_stale", "qweather", "hangzhou", protocol.ThemeYellow,
 			protocol.UrgencyNormal, 40, "system:weather:hangzhou:stale", "天气数据不可用", "暂时无法判断是否带伞", 5000, 15*time.Minute)}, nil

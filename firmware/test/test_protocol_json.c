@@ -41,7 +41,7 @@ static const char *VALID_SNAPSHOT =
       "\"current\":{\"observed_at\":\"2026-07-14T14:30:00+08:00\",\"temp_c\":31,\"icon\":\"101\",\"text\":\"Cloudy\",\"precip_mm\":0,\"freshness\":\"fresh\"},"
       "\"lunch\":{\"target_at\":\"2026-07-14T12:00:00+08:00\",\"is_past\":true,\"temp_c\":29,\"icon\":\"305\",\"text\":\"Showers\",\"pop\":60,\"precip_mm\":0.5,\"freshness\":\"cached\"},"
       "\"leave\":{\"target_at\":\"2026-07-14T19:00:00+08:00\",\"is_past\":false,\"temp_c\":27,\"icon\":\"305\",\"text\":\"Rain\",\"pop\":70,\"precip_mm\":0.7,\"freshness\":\"fresh\"},"
-      "\"next_outing\":{\"slot\":\"leave\",\"target_at\":\"2026-07-14T19:00:00+08:00\",\"umbrella_required\":true,\"confidence\":\"high\",\"reason\":\"rain 70%\"},"
+      "\"next_outing\":{\"slot\":\"leave\",\"target_at\":\"2026-07-14T19:00:00+08:00\",\"umbrella_required\":true,\"confidence\":\"high\",\"reason\":\"有雨\"},"
       "\"updated_at\":\"2026-07-14T14:31:00+08:00\"},"
     "\"system\":{\"bridge_online\":true,\"overall_freshness\":\"fresh\"}}}";
 
@@ -75,6 +75,7 @@ static void test_valid_snapshot_and_patch(void)
     assert(message.state.agents.items[2].status == BEACON_AGENT_WORKING);
     assert(message.state.agents.items[3].status == BEACON_AGENT_IDLE);
     assert(message.state.weather.next_outing.umbrella_required);
+    assert(strcmp(message.state.weather.next_outing.reason, "有雨") == 0);
     assert(strcmp(message.state.weather.provider, "和风天气") == 0);
     assert(strcmp(message.state.weather.current.observed_time, "14:30") == 0);
     assert(strcmp(message.state.weather.lunch.label, "午饭") == 0);

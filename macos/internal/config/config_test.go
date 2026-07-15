@@ -161,6 +161,19 @@ providers:
       window_after: 60m
       pop_threshold: 40
       repeat_before_outing: 30m
+    satellite_radiation:
+      enabled: true
+      latitude: 30.2163
+      longitude: 120.1734
+      lunch_refresh: "11:57"
+      leave_refresh: "18:28"
+      stale_after: 75m
+      direct_required: 300
+      ghi_required: 550
+      required_direct_share: 0.35
+      direct_suggested: 150
+      ghi_suggested: 400
+      suggested_direct_share: 0.25
 `
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
@@ -199,6 +212,14 @@ providers:
 	if weather.Umbrella.WindowBefore != time.Hour || weather.Umbrella.WindowAfter != time.Hour || weather.Umbrella.POPThreshold != 40 || weather.Umbrella.RepeatBeforeOuting != 30*time.Minute {
 		t.Fatalf("weather umbrella = %+v", weather.Umbrella)
 	}
+	if !weather.Satellite.Enabled || weather.Satellite.Latitude != 30.2163 || weather.Satellite.Longitude != 120.1734 ||
+		weather.Satellite.LunchRefresh != "11:57" || weather.Satellite.LeaveRefresh != "18:28" ||
+		weather.Satellite.StaleAfter != 75*time.Minute || weather.Satellite.DirectRequired != 300 ||
+		weather.Satellite.GHIRequired != 550 || weather.Satellite.RequiredDirectShare != 0.35 ||
+		weather.Satellite.DirectSuggested != 150 || weather.Satellite.GHISuggested != 400 ||
+		weather.Satellite.SuggestedDirectShare != 0.25 {
+		t.Fatalf("weather satellite radiation = %+v", weather.Satellite)
+	}
 }
 
 func TestInvalidWeatherConfigDisablesOnlyWeather(t *testing.T) {
@@ -230,6 +251,37 @@ providers:
 	}
 	if got.Providers.Mock.Enabled {
 		t.Fatal("invalid weather configuration must not enable Mock fixtures")
+	}
+}
+
+func TestInvalidSatelliteRadiationConfigDisablesOnlyWeather(t *testing.T) {
+	t.Setenv("AGENT_BEACON_TOKEN", "bridge-secret")
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	contents := `
+providers:
+  weather:
+    enabled: true
+    provider: qweather
+    api_host: abc.qweatherapi.com
+    project_id: project
+    credential_id: credential
+    private_key_path: /tmp/key.pem
+    location: "120.16,30.27"
+    location_label: "杭州"
+    satellite_radiation:
+      enabled: true
+      latitude: 120
+      longitude: 30
+`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Providers.Weather.Enabled || !strings.Contains(got.Providers.Weather.ValidationError, "satellite_radiation") {
+		t.Fatalf("invalid satellite config = %+v", got.Providers.Weather)
 	}
 }
 

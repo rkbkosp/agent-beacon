@@ -316,24 +316,31 @@ func transitionNotifications(previous, current protocol.AgentsState, now time.Ti
 		switch {
 		case item.Status == protocol.AgentBlocked && old.Status != protocol.AgentBlocked:
 			detail := item.DisplayName + " · " + firstNonEmpty(item.CustomStatus, "BLOCKED")
-			result = append(result, agentNotification(now, item, "agent.blocked", protocol.ThemeYellow,
+			result = append(result, agentNotification(now, old, item, "agent.blocked", protocol.ThemeYellow,
 				protocol.UrgencyAttention, 75, session, "Agent 需要关注", detail, 7000, 30*time.Minute))
 		case item.Status == protocol.AgentDone && (old.Status == protocol.AgentWorking || old.Status == protocol.AgentBlocked):
 			detail := item.DisplayName + " · 等待查看"
-			result = append(result, agentNotification(now, item, "agent.done", protocol.ThemeGreen,
+			result = append(result, agentNotification(now, old, item, "agent.done", protocol.ThemeGreen,
 				protocol.UrgencyNormal, 50, session, "Agent 已完成", detail, 4000, time.Minute))
 		}
 	}
 	return result
 }
 
-func agentNotification(now time.Time, item protocol.AgentItem, kind string, theme protocol.Theme,
+func agentNotification(now time.Time, previous, item protocol.AgentItem, kind string, theme protocol.Theme,
 	urgency protocol.Urgency, priority uint8, session, title, detail string, display uint32,
 	ttl time.Duration) *protocol.Notification {
+	transitionRevision := fmt.Sprintf("%d", item.Revision)
+	if item.Revision <= previous.Revision {
+		// Herdr 0.7.3 currently reports revision=0 for agent snapshots. A local
+		// transition stamp keeps separate blocked/done episodes from collapsing
+		// to the same device-side dedupe key.
+		transitionRevision = fmt.Sprintf("local-%d", now.UnixNano())
+	}
 	return &protocol.Notification{
 		Category: protocol.CategoryAgent, Kind: kind, Source: "herdr", SubjectID: item.PaneID,
 		Theme: theme, Urgency: urgency, Priority: priority,
-		DedupeKey:    fmt.Sprintf("agent:%s:%s:%s:%d", item.PaneID, session, strings.TrimPrefix(kind, "agent."), item.Revision),
+		DedupeKey:    fmt.Sprintf("agent:%s:%s:%s:%s", item.PaneID, session, strings.TrimPrefix(kind, "agent."), transitionRevision),
 		SupersedeKey: "agent:" + item.PaneID, Title: title, Detail: detail, SourceLabel: "Herdr",
 		DisplayMS: display, ExpiresAt: now.Add(ttl), ReplayAfterInterrupt: urgency != protocol.UrgencyNormal,
 		MaxReplays: 1,

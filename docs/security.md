@@ -15,9 +15,10 @@ mode `0600` or stricter. It is read directly by the Bridge and is never copied
 into the repository, cache, device protocol, logs, or NVS. JWTs are signed in
 memory for 15 minutes and are never persisted or printed.
 
-The QWeather last-good cache is stored below the macOS user cache directory as
+The weather last-good cache is stored below the macOS user cache directory as
 `AgentBeacon/qweather-cache.json` with mode `0600`. It contains only endpoint,
-location, fetch/update times, and upstream weather payloads. Run
+location, outing slot/target, fetch/update times, and QWeather/Open-Meteo
+upstream weather payloads. Run
 `agent-beacon-bridge weather cache clear --config <path>` to delete it.
 
 ## Device Data Boundary

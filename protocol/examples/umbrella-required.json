@@ -15,7 +15,7 @@
     "dedupe_key": "weather:hangzhou:leave:20260714T1900:umbrella",
     "supersede_key": "weather:hangzhou:leave:20260714T1900",
     "title": "Bring an umbrella",
-    "detail": "19:00 - rain 70%",
+    "detail": "有雨",
     "source_label": "QWeather",
     "display_ms": 6500,
     "expires_at": "2026-07-14T20:00:00+08:00",

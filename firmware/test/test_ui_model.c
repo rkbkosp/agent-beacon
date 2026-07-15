@@ -28,6 +28,23 @@ int main(void)
     assert(state->weather.current.temp_c == 31);
     assert(state->weather.next_outing.umbrella_required == true);
 
+    char recommendation[64];
+    beacon_weather_state_t weather = state->weather;
+    beacon_ui_format_weather_recommendation(&weather, recommendation, sizeof(recommendation));
+    assert(strcmp(recommendation, "下班·需要带伞·有雨") == 0);
+    weather.next_outing.umbrella_required = false;
+    strcpy(weather.next_outing.reason, "无雨");
+    beacon_ui_format_weather_recommendation(&weather, recommendation, sizeof(recommendation));
+    assert(strcmp(recommendation, "下班·无需带伞·无雨") == 0);
+    weather.next_outing.umbrella_required = true;
+    strcpy(weather.next_outing.reason, "遮阳");
+    beacon_ui_format_weather_recommendation(&weather, recommendation, sizeof(recommendation));
+    assert(strcmp(recommendation, "下班·需要带伞·遮阳") == 0);
+    weather.next_outing.umbrella_known = false;
+    strcpy(weather.next_outing.reason, "数据不足");
+    beacon_ui_format_weather_recommendation(&weather, recommendation, sizeof(recommendation));
+    assert(strcmp(recommendation, "下班·判断未知·数据不足") == 0);
+
     assert(strcmp(beacon_agent_status_label(BEACON_AGENT_BLOCKED), "需交互") == 0);
     assert(strcmp(beacon_agent_status_label(BEACON_AGENT_DONE), "已完成") == 0);
     assert(strcmp(beacon_agent_status_label(BEACON_AGENT_WORKING), "工作中") == 0);

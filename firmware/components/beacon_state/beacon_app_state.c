@@ -58,7 +58,7 @@ void beacon_app_state_init_mock(beacon_app_state_t *state)
     };
     state->weather.next_outing = (beacon_next_outing_t) {
         .slot = "leave", .time = "19:00", .umbrella_known = true,
-        .umbrella_required = true, .reason = "小雨，降水概率 70%",
+        .umbrella_required = true, .reason = "有雨",
     };
 
     strcpy(state->system.timezone, "Asia/Shanghai");

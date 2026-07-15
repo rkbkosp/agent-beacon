@@ -92,6 +92,21 @@ type WeatherUmbrellaConfig struct {
 	RepeatBeforeOuting time.Duration
 }
 
+type SatelliteRadiationConfig struct {
+	Enabled              bool
+	Latitude             float64
+	Longitude            float64
+	LunchRefresh         string
+	LeaveRefresh         string
+	StaleAfter           time.Duration
+	DirectRequired       float64
+	GHIRequired          float64
+	RequiredDirectShare  float64
+	DirectSuggested      float64
+	GHISuggested         float64
+	SuggestedDirectShare float64
+}
+
 type WeatherConfig struct {
 	Enabled         bool
 	Provider        string
@@ -108,6 +123,7 @@ type WeatherConfig struct {
 	Refresh         WeatherRefreshConfig
 	Cache           WeatherCacheConfig
 	Umbrella        WeatherUmbrellaConfig
+	Satellite       SatelliteRadiationConfig
 	ValidationError string
 }
 
@@ -205,6 +221,20 @@ type rawConfig struct {
 				POPThreshold       *int   `yaml:"pop_threshold"`
 				RepeatBeforeOuting string `yaml:"repeat_before_outing"`
 			} `yaml:"umbrella"`
+			Satellite struct {
+				Enabled              *bool    `yaml:"enabled"`
+				Latitude             *float64 `yaml:"latitude"`
+				Longitude            *float64 `yaml:"longitude"`
+				LunchRefresh         string   `yaml:"lunch_refresh"`
+				LeaveRefresh         string   `yaml:"leave_refresh"`
+				StaleAfter           string   `yaml:"stale_after"`
+				DirectRequired       *float64 `yaml:"direct_required"`
+				GHIRequired          *float64 `yaml:"ghi_required"`
+				RequiredDirectShare  *float64 `yaml:"required_direct_share"`
+				DirectSuggested      *float64 `yaml:"direct_suggested"`
+				GHISuggested         *float64 `yaml:"ghi_suggested"`
+				SuggestedDirectShare *float64 `yaml:"suggested_direct_share"`
+			} `yaml:"satellite_radiation"`
 		} `yaml:"weather"`
 	} `yaml:"providers"`
 }
@@ -234,6 +264,11 @@ func Default() Config {
 					ForceBeforeOuting: []time.Duration{time.Hour, 30 * time.Minute}},
 				Cache:    WeatherCacheConfig{NowStaleAfter: 45 * time.Minute, HourlyStaleAfter: 90 * time.Minute, PersistLastGood: true},
 				Umbrella: WeatherUmbrellaConfig{WindowBefore: time.Hour, WindowAfter: time.Hour, POPThreshold: 40, RepeatBeforeOuting: 30 * time.Minute},
+				Satellite: SatelliteRadiationConfig{
+					Latitude: 30.2163, Longitude: 120.1734, LunchRefresh: "11:57", LeaveRefresh: "18:28",
+					StaleAfter: 75 * time.Minute, DirectRequired: 300, GHIRequired: 550, RequiredDirectShare: 0.35,
+					DirectSuggested: 150, GHISuggested: 400, SuggestedDirectShare: 0.25,
+				},
 			},
 		},
 	}
@@ -497,6 +532,36 @@ func applyRawWeather(weather *WeatherConfig, raw *rawConfig) {
 		weather.Umbrella.POPThreshold = *value.Umbrella.POPThreshold
 	}
 	weather.Umbrella.RepeatBeforeOuting = parseDurationOrKeep(value.Umbrella.RepeatBeforeOuting, weather.Umbrella.RepeatBeforeOuting)
+	if value.Satellite.Enabled != nil {
+		weather.Satellite.Enabled = *value.Satellite.Enabled
+	}
+	if value.Satellite.Latitude != nil {
+		weather.Satellite.Latitude = *value.Satellite.Latitude
+	}
+	if value.Satellite.Longitude != nil {
+		weather.Satellite.Longitude = *value.Satellite.Longitude
+	}
+	assignNonEmpty(&weather.Satellite.LunchRefresh, value.Satellite.LunchRefresh)
+	assignNonEmpty(&weather.Satellite.LeaveRefresh, value.Satellite.LeaveRefresh)
+	weather.Satellite.StaleAfter = parseDurationOrKeep(value.Satellite.StaleAfter, weather.Satellite.StaleAfter)
+	if value.Satellite.DirectRequired != nil {
+		weather.Satellite.DirectRequired = *value.Satellite.DirectRequired
+	}
+	if value.Satellite.GHIRequired != nil {
+		weather.Satellite.GHIRequired = *value.Satellite.GHIRequired
+	}
+	if value.Satellite.RequiredDirectShare != nil {
+		weather.Satellite.RequiredDirectShare = *value.Satellite.RequiredDirectShare
+	}
+	if value.Satellite.DirectSuggested != nil {
+		weather.Satellite.DirectSuggested = *value.Satellite.DirectSuggested
+	}
+	if value.Satellite.GHISuggested != nil {
+		weather.Satellite.GHISuggested = *value.Satellite.GHISuggested
+	}
+	if value.Satellite.SuggestedDirectShare != nil {
+		weather.Satellite.SuggestedDirectShare = *value.Satellite.SuggestedDirectShare
+	}
 }
 
 func assignNonEmpty(target *string, value string) {
@@ -596,6 +661,33 @@ func ValidateWeather(weather WeatherConfig) error {
 	}
 	if weather.Umbrella.POPThreshold < 0 || weather.Umbrella.POPThreshold > 100 {
 		return fmt.Errorf("providers.weather.umbrella.pop_threshold must be between 0 and 100")
+	}
+	if err := validateSatelliteRadiation(weather.Satellite); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateSatelliteRadiation(satellite SatelliteRadiationConfig) error {
+	if !satellite.Enabled {
+		return nil
+	}
+	if satellite.Latitude < -90 || satellite.Latitude > 90 || satellite.Longitude < -180 || satellite.Longitude > 180 {
+		return fmt.Errorf("providers.weather.satellite_radiation latitude/longitude are outside valid ranges")
+	}
+	if !clockPattern.MatchString(satellite.LunchRefresh) || !clockPattern.MatchString(satellite.LeaveRefresh) {
+		return fmt.Errorf("providers.weather.satellite_radiation lunch_refresh and leave_refresh must use HH:MM")
+	}
+	if satellite.StaleAfter <= 0 {
+		return fmt.Errorf("providers.weather.satellite_radiation.stale_after must be a positive duration")
+	}
+	if satellite.DirectSuggested < 0 || satellite.DirectRequired < satellite.DirectSuggested ||
+		satellite.GHISuggested < 0 || satellite.GHIRequired < satellite.GHISuggested {
+		return fmt.Errorf("providers.weather.satellite_radiation required thresholds must be at least their suggested thresholds")
+	}
+	if satellite.SuggestedDirectShare < 0 || satellite.SuggestedDirectShare > 1 ||
+		satellite.RequiredDirectShare < satellite.SuggestedDirectShare || satellite.RequiredDirectShare > 1 {
+		return fmt.Errorf("providers.weather.satellite_radiation direct-share thresholds must be ordered values between 0 and 1")
 	}
 	return nil
 }

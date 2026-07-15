@@ -504,7 +504,8 @@ working/blocked -> done
 
 - 初次 snapshot 不批量播放所有 done；
 - 重连后的 snapshot 只用于同步，不补播旧 done；
-- 每个通知 key 至少包含 `pane_id + agent_session + target_status + revision`；
+- 每个通知 key 至少包含 `pane_id + agent_session + target_status + transition_revision`；
+- Herdr revision 未递增时，`transition_revision` 使用 Mac Bridge 产生的本地状态转移标识；
 - 同一 Agent 从 blocked 转 done 时，done supersede 尚未展示的 blocked；
 - `working`、`idle`、`unknown` 只更新页面；
 - Herdr 离线超过 10 秒后生成一次黄色系统通知；
@@ -532,13 +533,15 @@ herdr api schema --json
 
 ### 4.1 数据源
 
-使用和风天气开发者服务，由 Mac Provider 请求，ESP32 不持有天气凭证。
+使用和风天气开发者服务提供实况/预报，并由 Open-Meteo 卫星辐射提供直晒判断；
+两者都由 Mac Provider 请求，ESP32 不持有天气凭证，也不接收卫星原始数组。
 
 接口：
 
 ```text
 GET /v7/weather/now
 GET /v7/weather/72h
+GET https://satellite-api.open-meteo.com/v1/archive
 ```
 
 选择 `72h` 而不是只取 `24h`，用于当前时间已经晚于 19:00 时仍能得到下一工作日午饭和下班窗口。
@@ -547,6 +550,7 @@ GET /v7/weather/72h
 
 - 实时天气：<https://dev.qweather.com/docs/api/weather/weather-now/>
 - 逐小时天气：<https://dev.qweather.com/docs/api/weather/weather-hourly-forecast/>
+- 卫星辐射：<https://open-meteo.com/en/docs/satellite-radiation-api>
 
 配置：
 
@@ -568,6 +572,13 @@ providers:
     umbrella_window_before: 60m
     umbrella_window_after: 60m
     umbrella_pop_threshold: 40
+    satellite_radiation:
+      enabled: true
+      latitude: 30.2163
+      longitude: 120.1734
+      lunch_refresh: "11:57"
+      leave_refresh: "18:28"
+      stale_after: 75m
 ```
 
 `location` 可使用 LocationID 或经纬度。不要通过公网 IP 猜位置。
@@ -648,6 +659,17 @@ LEAVE_SLOT  19:00
 
 禁止仅通过字符串包含一个“雨”字做唯一判断。图标集合和天气状态映射必须集中在 QWeather adapter 中并有测试。
 
+在 QWeather 未要求雨伞时，使用对应时段最近一次 Open-Meteo 卫星结果补充遮阳判断：
+
+```text
+最后 3 个完整 10 分钟点分别取 GHI、Direct 中位数
+Direct >= 300，或 GHI >= 550 且 Direct/GHI >= 35%：需要带伞·遮阳（high）
+Direct >= 150，或 GHI >= 400 且 Direct/GHI >= 25%：需要带伞·遮阳（medium）
+最新有效卫星点超过 75 分钟：不参与判断
+```
+
+有雨优先于遮阳；卫星“无需遮阳”不能覆盖未知的降雨判断。
+
 建议模型：
 
 ```json
@@ -656,7 +678,7 @@ LEAVE_SLOT  19:00
   "target_at": "2026-07-14T19:00:00+08:00",
   "umbrella_required": true,
   "confidence": "high",
-  "reason": "19:00 降水概率 70%",
+  "reason": "有雨",
   "max_pop": 70,
   "total_precip_mm": 1.2
 }
@@ -681,7 +703,7 @@ unknown  数据缺失或 stale
 │ 31°          29°         27° │
 │ 多云         阵雨        小雨 │
 │                              │
-│        下班 · 需要带伞       │
+│      下班·需要带伞·遮阳      │
 └──────────────────────────────┘
 ```
 
@@ -718,6 +740,10 @@ Recommendation area   y=113..167
 无需带伞      无背景色，仅显示中性文字
 判断未知      黄色 + 问号
 ```
+
+文字固定使用 `时段·需要/无需带伞·原因`，例如 `午饭·需要带伞·有雨`、
+`下班·需要带伞·遮阳`、`下班·无需带伞·无雨`。未知时显示
+`时段·判断未知·数据不足`。
 
 推荐区只针对下一次出门窗口，不同时给两个建议；使用“午饭”或“下班”标签，不显示具体时间。
 
@@ -783,7 +809,7 @@ true -> false
       "target_at": "2026-07-14T19:00:00+08:00",
       "umbrella_required": true,
       "confidence": "high",
-      "reason": "19:00 小雨，降水概率 70%"
+      "reason": "有雨"
     },
     "updated_at": "2026-07-14T14:31:00+08:00"
   }
@@ -925,6 +951,7 @@ Mac Mock 必须提供固定样例：
 - [ ] 午饭和下班标签不显示具体时间；
 - [ ] 无需带伞时推荐区无背景色；
 - [ ] 推荐条正确判断下一次出门是否带伞；
+- [ ] 推荐条按“时段·需要/无需带伞·原因”显示有雨/遮阳原因；
 - [ ] 降水风险首次出现时触发红色全屏通知；
 - [ ] Provider 部分失败时其他页面仍正常；
 - [ ] 当前阶段没有任务、邮件、消息和评测实现。

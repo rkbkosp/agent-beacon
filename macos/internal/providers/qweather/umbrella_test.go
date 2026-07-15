@@ -34,7 +34,7 @@ func TestUmbrellaRequiredByPrecipPOPWetIconsAndChineseText(t *testing.T) {
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			got := DecideUmbrella([]HourlyPoint{testCase.point}, target, cfg, false)
-			if got.Required == nil || !*got.Required || got.Confidence != testCase.confidence || got.Reason == "" {
+			if got.Required == nil || !*got.Required || got.Confidence != testCase.confidence || got.Reason != "有雨" {
 				t.Fatalf("decision = %+v", got)
 			}
 		})
@@ -54,7 +54,7 @@ func TestUmbrellaUnknownForStaleMissingOrInvalidWindowData(t *testing.T) {
 		{"all fields invalid", []HourlyPoint{{ForecastAt: target}}, false}} {
 		t.Run(testCase.name, func(t *testing.T) {
 			got := DecideUmbrella(testCase.points, target, cfg, testCase.stale)
-			if got.Required != nil || got.Confidence != "unknown" || got.Reason != "天气数据暂不可用" {
+			if got.Required != nil || got.Confidence != "unknown" || got.Reason != "数据不足" {
 				t.Fatalf("decision = %+v", got)
 			}
 		})
@@ -68,7 +68,27 @@ func TestUmbrellaNotRequiredOnlyFromFreshValidDryWindow(t *testing.T) {
 	got := DecideUmbrella([]HourlyPoint{{ForecastAt: target.Add(-time.Hour), Text: "晴", Icon: "100", POP: &lowPOP, Precip: &zeroPrecip},
 		{ForecastAt: target.Add(time.Hour), Text: "多云", Icon: "101", POP: intValue(10), Precip: floatValue(0)}},
 		target, config.Default().Providers.Weather.Umbrella, false)
-	if got.Required == nil || *got.Required || got.Confidence != "high" || got.Reason == "" {
+	if got.Required == nil || *got.Required || got.Confidence != "high" || got.Reason != "无雨" {
 		t.Fatalf("decision = %+v", got)
+	}
+}
+
+func TestCombinedUmbrellaDecisionPrioritizesRainThenSunshade(t *testing.T) {
+	rainRequired := true
+	rain := UmbrellaDecision{Required: &rainRequired, Confidence: "medium", Reason: "有雨"}
+	got := CombineUmbrellaDecision(rain, SunshadeDecision{Available: true, Required: true, Confidence: "high"})
+	if got.Required == nil || !*got.Required || got.Reason != "有雨" || got.Confidence != "medium" {
+		t.Fatalf("rain priority decision = %+v", got)
+	}
+
+	unknown := UmbrellaDecision{Confidence: "unknown", Reason: "数据不足"}
+	got = CombineUmbrellaDecision(unknown, SunshadeDecision{Available: true, Required: true, Confidence: "high"})
+	if got.Required == nil || !*got.Required || got.Reason != "遮阳" || got.Confidence != "high" {
+		t.Fatalf("sunshade fallback decision = %+v", got)
+	}
+
+	got = CombineUmbrellaDecision(unknown, SunshadeDecision{Available: true, Confidence: "high"})
+	if got.Required != nil || got.Reason != "数据不足" {
+		t.Fatalf("unknown rain must not become no-umbrella: %+v", got)
 	}
 }

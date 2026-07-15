@@ -78,6 +78,10 @@ providers:
     private_key_path: "` + keyPath + `"
     location: "101210101"
     location_label: "杭州"
+    satellite_radiation:
+      enabled: true
+      latitude: 30.2163
+      longitude: 120.1734
 `
 	if err := os.WriteFile(configPath, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
@@ -118,6 +122,26 @@ func TestWeatherCacheClearDoesNotRequireBridgeToken(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	exitCode := Run(context.Background(), []string{"weather", "cache", "clear", "--config", configPath}, &stdout, &stderr)
 	if exitCode != 0 || !strings.Contains(stdout.String(), "cleared") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
+	}
+}
+
+func TestWeatherFetchRadiationUsesOpenMeteoNativeResolution(t *testing.T) {
+	configPath, _ := writeWeatherCLIConfig(t)
+	previousFactory := weatherHTTPClientFactory
+	weatherHTTPClientFactory = func(time.Duration) *http.Client {
+		return &http.Client{Transport: cliRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+			if request.URL.Host != "satellite-api.open-meteo.com" || request.URL.Query().Get("temporal_resolution") != "native" {
+				t.Fatalf("satellite request = %s", request.URL)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header),
+				Body: io.NopCloser(strings.NewReader(`{"timezone":"Asia/Shanghai","hourly":{"time":["2026-07-15T11:00","2026-07-15T11:10","2026-07-15T11:20"],"shortwave_radiation_instant":[680,725,701],"direct_radiation_instant":[490,535,502],"diffuse_radiation_instant":[190,190,199],"direct_normal_irradiance_instant":[540,585,550],"terrestrial_radiation_instant":[1050,1070,1080]}}`))}, nil
+		})}
+	}
+	t.Cleanup(func() { weatherHTTPClientFactory = previousFactory })
+	var stdout, stderr bytes.Buffer
+	exitCode := Run(context.Background(), []string{"weather", "fetch-radiation", "--config", configPath}, &stdout, &stderr)
+	if exitCode != 0 || !strings.Contains(stdout.String(), `"shortwave_radiation_instant"`) {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
 	}
 }

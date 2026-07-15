@@ -31,6 +31,10 @@ func WithJitter(jitter func(time.Duration) time.Duration) Option {
 	return func(provider *Provider) { provider.jitter = jitter }
 }
 
+func WithRadiationClient(client RadiationClient) Option {
+	return func(provider *Provider) { provider.radiationClient = client }
+}
+
 type refreshMask uint8
 
 const (
@@ -42,6 +46,11 @@ const (
 type dailyRefreshTime struct {
 	hour   int
 	minute int
+}
+
+type radiationRefreshEvent struct {
+	at   time.Time
+	slot string
 }
 
 var (
@@ -59,15 +68,17 @@ type providerFlight struct {
 }
 
 type Provider struct {
-	config config.WeatherConfig
-	client WeatherClient
-	cache  CacheStore
-	now    func() time.Time
-	jitter func(time.Duration) time.Duration
+	config          config.WeatherConfig
+	client          WeatherClient
+	radiationClient RadiationClient
+	cache           CacheStore
+	now             func() time.Time
+	jitter          func(time.Duration) time.Duration
 
 	mu                     sync.Mutex
 	current                *NowData
 	hourly                 *HourlyData
+	radiation              map[string]*RadiationData
 	cacheRecords           []CacheRecord
 	cacheLoaded            bool
 	failures               int
@@ -79,6 +90,7 @@ type Provider struct {
 	staleNotified          bool
 	forcedRefreshes        map[string]bool
 	lastScheduledWindowKey string
+	lastRadiationError     string
 
 	flightsMu sync.Mutex
 	flights   map[refreshMask]*providerFlight
@@ -99,13 +111,17 @@ func New(weather config.WeatherConfig, client WeatherClient, cache CacheStore, o
 	}
 	provider := &Provider{
 		config: weather, client: client, cache: cache, now: time.Now, jitter: defaultJitter,
-		reminded: make(map[string]bool), forcedRefreshes: make(map[string]bool), flights: make(map[refreshMask]*providerFlight),
+		reminded: make(map[string]bool), forcedRefreshes: make(map[string]bool), radiation: make(map[string]*RadiationData),
+		flights: make(map[refreshMask]*providerFlight),
 	}
 	for _, option := range options {
 		option(provider)
 	}
 	if provider.now == nil || provider.jitter == nil {
 		return nil, errors.New("qweather clock and jitter functions are required")
+	}
+	if weather.Satellite.Enabled && provider.radiationClient == nil {
+		return nil, errors.New("open-meteo satellite radiation client is required")
 	}
 	return provider, nil
 }
@@ -132,10 +148,25 @@ func (provider *Provider) Start(ctx context.Context, output chan<- providers.Upd
 	hourlyTicker := time.NewTicker(provider.config.Refresh.Hourly)
 	minuteTicker := time.NewTicker(time.Minute)
 	forcedRefreshTimer := newForcedRefreshTimer(provider.now())
+	var radiationTimer *time.Timer
+	var radiationTimerChannel <-chan time.Time
+	var radiationEvent radiationRefreshEvent
+	if provider.config.Satellite.Enabled {
+		var err error
+		radiationEvent, err = nextRadiationRefresh(provider.now(), provider.config.Satellite)
+		if err != nil {
+			return err
+		}
+		radiationTimer = time.NewTimer(radiationEvent.at.Sub(provider.now()))
+		radiationTimerChannel = radiationTimer.C
+	}
 	defer nowTicker.Stop()
 	defer hourlyTicker.Stop()
 	defer minuteTicker.Stop()
 	defer forcedRefreshTimer.Stop()
+	if radiationTimer != nil {
+		defer radiationTimer.Stop()
+	}
 	for {
 		var next []providers.Update
 		select {
@@ -150,6 +181,10 @@ func (provider *Provider) Start(ctx context.Context, output chan<- providers.Upd
 		case <-forcedRefreshTimer.C:
 			next, _ = provider.Refresh(ctx, true)
 			resetForcedRefreshTimer(forcedRefreshTimer, provider.now())
+		case <-radiationTimerChannel:
+			next, _ = provider.RefreshRadiation(ctx, radiationEvent.slot)
+			radiationEvent, _ = nextRadiationRefresh(provider.now(), provider.config.Satellite)
+			radiationTimer.Reset(radiationEvent.at.Sub(provider.now()))
 		}
 		if err := sendProviderUpdates(ctx, output, next); err != nil {
 			return err
@@ -180,13 +215,37 @@ func resetForcedRefreshTimer(timer *time.Timer, now time.Time) {
 	timer.Reset(nextCSTForcedRefresh(now).Sub(now))
 }
 
+func nextRadiationRefresh(now time.Time, satellite config.SatelliteRadiationConfig) (radiationRefreshEvent, error) {
+	lunchHour, lunchMinute, err := parseClock(satellite.LunchRefresh)
+	if err != nil {
+		return radiationRefreshEvent{}, fmt.Errorf("parse satellite lunch refresh: %w", err)
+	}
+	leaveHour, leaveMinute, err := parseClock(satellite.LeaveRefresh)
+	if err != nil {
+		return radiationRefreshEvent{}, fmt.Errorf("parse satellite leave refresh: %w", err)
+	}
+	localNow := now.In(chinaStandardTime)
+	events := []radiationRefreshEvent{
+		{at: time.Date(localNow.Year(), localNow.Month(), localNow.Day(), lunchHour, lunchMinute, 0, 0, chinaStandardTime), slot: "lunch"},
+		{at: time.Date(localNow.Year(), localNow.Month(), localNow.Day(), leaveHour, leaveMinute, 0, 0, chinaStandardTime), slot: "leave"},
+	}
+	sort.Slice(events, func(left, right int) bool { return events[left].at.Before(events[right].at) })
+	for _, event := range events {
+		if event.at.After(localNow) {
+			return event, nil
+		}
+	}
+	events[0].at = events[0].at.AddDate(0, 0, 1)
+	return events[0], nil
+}
+
 func (provider *Provider) Snapshot(context.Context) (protocol.StatePatch, error) {
 	if err := provider.loadCache(); err != nil {
 		return protocol.StatePatch{}, err
 	}
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
-	state, err := BuildWeatherState(provider.now(), provider.config, provider.current, provider.hourly)
+	state, err := BuildWeatherStateWithRadiation(provider.now(), provider.config, provider.current, provider.hourly, provider.radiation)
 	if err != nil {
 		return protocol.StatePatch{}, err
 	}
@@ -206,11 +265,69 @@ func (provider *Provider) Health(context.Context) providers.Health {
 	if provider.current == nil || provider.hourly == nil {
 		return providers.Health{Healthy: false, Detail: "qweather has no successful now/hourly data"}
 	}
-	return providers.Health{Healthy: true, Detail: "qweather now/hourly data available"}
+	detail := "qweather now/hourly data available"
+	if provider.config.Satellite.Enabled {
+		if provider.lastRadiationError != "" {
+			detail += "; open-meteo satellite degraded: " + provider.lastRadiationError
+		} else if len(provider.radiation) > 0 {
+			detail += "; open-meteo satellite data available"
+		} else {
+			detail += "; open-meteo satellite awaiting scheduled refresh"
+		}
+	}
+	return providers.Health{Healthy: true, Detail: detail}
 }
 
 func (provider *Provider) Refresh(ctx context.Context, force bool) ([]providers.Update, error) {
 	return provider.refresh(ctx, refreshAll, force)
+}
+
+func (provider *Provider) RefreshRadiation(ctx context.Context, slot string) ([]providers.Update, error) {
+	if !provider.config.Satellite.Enabled || provider.radiationClient == nil {
+		return nil, errors.New("open-meteo satellite radiation is disabled")
+	}
+	if slot != "lunch" && slot != "leave" {
+		return nil, fmt.Errorf("invalid satellite radiation slot %q", slot)
+	}
+	now := provider.now()
+	targets, err := TargetsFor(now, provider.config.Timezone, provider.config.Schedule)
+	if err != nil {
+		return nil, err
+	}
+	target := targets.Lunch
+	if slot == "leave" {
+		target = targets.Leave
+	}
+	data, err := provider.radiationClient.FetchRadiation(ctx)
+	if err != nil {
+		provider.mu.Lock()
+		provider.lastRadiationError = err.Error()
+		provider.mu.Unlock()
+		return nil, fmt.Errorf("refresh open-meteo satellite radiation: %w", err)
+	}
+	data.Slot = slot
+	data.TargetAt = target
+	key := radiationWindowKey(target, slot)
+
+	provider.mu.Lock()
+	copy := data
+	provider.radiation[key] = &copy
+	provider.replaceRadiationCacheRecordLocked(data)
+	records := append([]CacheRecord(nil), provider.cacheRecords...)
+	updates, stateErr := provider.stateUpdatesLocked(now, false)
+	provider.lastRadiationError = ""
+	provider.mu.Unlock()
+
+	var combined error
+	if stateErr != nil {
+		combined = errors.Join(combined, stateErr)
+	}
+	if provider.config.Cache.PersistLastGood {
+		if saveErr := provider.cache.Save(records); saveErr != nil {
+			combined = errors.Join(combined, saveErr)
+		}
+	}
+	return updates, combined
 }
 
 func (provider *Provider) refresh(ctx context.Context, mask refreshMask, force bool) ([]providers.Update, error) {
@@ -321,24 +438,41 @@ func (provider *Provider) loadCache() error {
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
 	for _, record := range records {
-		if record.Provider != "qweather" || record.Location != provider.config.Location {
+		switch record.Provider {
+		case "qweather":
+			if record.Location != provider.config.Location {
+				continue
+			}
+			switch record.Endpoint {
+			case "/v7/weather/now":
+				parsed, parseErr := parseCachedNow(record)
+				if parseErr != nil {
+					continue
+				}
+				if provider.current == nil || parsed.FetchedAt.After(provider.current.FetchedAt) {
+					provider.current = &parsed
+				}
+			case "/v7/weather/24h", "/v7/weather/72h":
+				parsed, parseErr := parseCachedHourly(record)
+				if parseErr != nil {
+					continue
+				}
+				provider.hourly = mergeHourly(provider.hourly, parsed, provider.now())
+			}
+		case "open-meteo":
+			if !provider.config.Satellite.Enabled || record.Location != radiationLocationKey(provider.config.Satellite) {
+				continue
+			}
+			parsed, parseErr := parseCachedRadiation(record, provider.config.Timezone)
+			if parseErr != nil {
+				continue
+			}
+			key := radiationWindowKey(*record.TargetAt, record.Slot)
+			if existing := provider.radiation[key]; existing == nil || parsed.FetchedAt.After(existing.FetchedAt) {
+				provider.radiation[key] = &parsed
+			}
+		default:
 			continue
-		}
-		switch record.Endpoint {
-		case "/v7/weather/now":
-			parsed, parseErr := parseCachedNow(record)
-			if parseErr != nil {
-				continue
-			}
-			if provider.current == nil || parsed.FetchedAt.After(provider.current.FetchedAt) {
-				provider.current = &parsed
-			}
-		case "/v7/weather/24h", "/v7/weather/72h":
-			parsed, parseErr := parseCachedHourly(record)
-			if parseErr != nil {
-				continue
-			}
-			provider.hourly = mergeHourly(provider.hourly, parsed, provider.now())
 		}
 		provider.cacheRecords = append(provider.cacheRecords, record)
 	}
@@ -352,7 +486,7 @@ func (provider *Provider) cachedUpdate() (providers.Update, bool) {
 	if provider.current == nil && provider.hourly == nil {
 		return providers.Update{}, false
 	}
-	state, err := BuildWeatherState(provider.now(), provider.config, provider.current, provider.hourly)
+	state, err := BuildWeatherStateWithRadiation(provider.now(), provider.config, provider.current, provider.hourly, provider.radiation)
 	if err != nil {
 		return providers.Update{}, false
 	}
@@ -361,7 +495,7 @@ func (provider *Provider) cachedUpdate() (providers.Update, bool) {
 }
 
 func (provider *Provider) stateUpdatesLocked(now time.Time, hourlySucceeded bool) ([]providers.Update, error) {
-	state, err := BuildWeatherState(now, provider.config, provider.current, provider.hourly)
+	state, err := BuildWeatherStateWithRadiation(now, provider.config, provider.current, provider.hourly, provider.radiation)
 	if err != nil {
 		return nil, err
 	}
@@ -449,12 +583,18 @@ func (provider *Provider) umbrellaNotification(state protocol.WeatherState, remi
 	if outing.Slot == "leave" {
 		label = "下班"
 	}
+	source := "qweather"
+	sourceLabel := "QWeather"
+	if outing.Reason == "遮阳" {
+		source = "open-meteo"
+		sourceLabel = "Open-Meteo"
+	}
 	return &protocol.Notification{
-		Category: protocol.CategoryWeather, Kind: kind, Source: "qweather",
+		Category: protocol.CategoryWeather, Kind: kind, Source: source,
 		SubjectID: provider.config.Location + ":" + outing.Slot, Theme: protocol.ThemeRed,
 		Urgency: protocol.UrgencyAttention, Priority: 72,
 		DedupeKey: prefix + date + ":" + outing.Slot, SupersedeKey: "weather:umbrella:" + date + ":" + outing.Slot,
-		Title: label + "记得带伞", Detail: outing.Reason, SourceLabel: "QWeather", DisplayMS: 6500,
+		Title: label + "记得带伞", Detail: outing.Reason, SourceLabel: sourceLabel, DisplayMS: 6500,
 		ExpiresAt: outing.TargetAt.Add(provider.config.Umbrella.WindowAfter), ReplayAfterInterrupt: true, MaxReplays: 1,
 	}
 }
@@ -484,6 +624,25 @@ func (provider *Provider) appendHourlyCacheRecordLocked(data HourlyData) {
 	provider.cacheRecords = append(provider.cacheRecords, CacheRecord{Provider: "qweather", Endpoint: data.Endpoint, Location: provider.config.Location,
 		FetchedAt: data.FetchedAt, UpdateTime: data.UpdateTime.Format(time.RFC3339), PayloadJSON: append(json.RawMessage(nil), data.Raw...)})
 	provider.pruneCacheRecordsLocked()
+}
+
+func (provider *Provider) replaceRadiationCacheRecordLocked(data RadiationData) {
+	filtered := provider.cacheRecords[:0]
+	for _, record := range provider.cacheRecords {
+		if record.Provider != "open-meteo" || record.Slot != data.Slot {
+			filtered = append(filtered, record)
+		}
+	}
+	targetAt := data.TargetAt
+	provider.cacheRecords = append(filtered, CacheRecord{
+		Provider: "open-meteo", Endpoint: "/v1/archive", Location: radiationLocationKey(provider.config.Satellite),
+		Slot: data.Slot, TargetAt: &targetAt, FetchedAt: data.FetchedAt, UpdateTime: data.ObservedAt.Format(time.RFC3339),
+		PayloadJSON: append(json.RawMessage(nil), data.Raw...),
+	})
+}
+
+func radiationLocationKey(satellite config.SatelliteRadiationConfig) string {
+	return fmt.Sprintf("%.4f,%.4f", satellite.Latitude, satellite.Longitude)
 }
 
 func (provider *Provider) pruneCacheRecordsLocked() {
@@ -552,6 +711,17 @@ func parseCachedHourly(record CacheRecord) (HourlyData, error) {
 	}
 	return HourlyData{Endpoint: record.Endpoint, UpdateTime: updateTime, Points: points, Refer: response.Refer,
 		FetchedAt: record.FetchedAt, Raw: append(json.RawMessage(nil), record.PayloadJSON...), FromCache: true}, nil
+}
+
+func parseCachedRadiation(record CacheRecord, timezone string) (RadiationData, error) {
+	data, err := parseRadiationResponse(record.PayloadJSON, timezone, record.FetchedAt)
+	if err != nil {
+		return RadiationData{}, err
+	}
+	data.Slot = record.Slot
+	data.TargetAt = *record.TargetAt
+	data.FromCache = true
+	return data, nil
 }
 
 func mergeHourly(existing *HourlyData, next HourlyData, now time.Time) *HourlyData {

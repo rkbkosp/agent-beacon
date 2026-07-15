@@ -120,7 +120,7 @@ make bridge-service-restart
 make bridge-service-uninstall  # 默认保留配置、token、日志和 Keychain secret
 ```
 
-## 和风天气
+## 天气与带伞判断
 
 复制 `macos/configs/config.example.yaml` 为不提交 Git 的本地配置，填写
 `providers.weather` 中的帐号独立 API Host、项目 ID、凭据 ID、位置，以及
@@ -132,6 +132,7 @@ cd macos
 go run ./cmd/agent-beacon-bridge weather doctor --config configs/config.local.yaml
 go run ./cmd/agent-beacon-bridge weather fetch-now --config configs/config.local.yaml
 go run ./cmd/agent-beacon-bridge weather fetch-hourly --config configs/config.local.yaml
+go run ./cmd/agent-beacon-bridge weather fetch-radiation --config configs/config.local.yaml
 go run ./cmd/agent-beacon-bridge weather snapshot --config configs/config.local.yaml
 go run ./cmd/agent-beacon-bridge weather refresh --config configs/config.local.yaml
 go run ./cmd/agent-beacon-bridge weather cache clear --config configs/config.local.yaml
@@ -140,7 +141,9 @@ go run ./cmd/agent-beacon-bridge weather cache clear --config configs/config.loc
 Bridge 会从私钥动态生成 Ed25519 JWT，不需要手工生成或保存静态 JWT。配置、
 鉴权、缓存、12:00/19:00 选择和带伞规则详见
 [`docs/weather.md`](./docs/weather.md)。
-天气数据由 [QWeather](https://www.qweather.com/) 提供。
+实况和预报由 [QWeather](https://www.qweather.com/) 提供；遮阳判断使用
+[Open-Meteo Satellite Radiation API](https://open-meteo.com/en/docs/satellite-radiation-api)，
+在 CST 11:57（午饭）与 18:28（下班）各获取一次原生时间分辨率数据。
 
 仅在 `providers.mock.enabled: true` 时可单独发送 fixture：
 

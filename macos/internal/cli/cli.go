@@ -123,7 +123,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	if settings.Providers.Weather.ValidationError != "" {
 		fmt.Fprintf(stderr, "Weather provider disabled: %s\n", settings.Providers.Weather.ValidationError)
 	} else if settings.Providers.Weather.Enabled {
-		weatherProvider, _, _, weatherErr := buildWeatherRuntime(settings.Providers.Weather)
+		weatherProvider, _, _, _, weatherErr := buildWeatherRuntime(settings.Providers.Weather)
 		if weatherErr != nil {
 			fmt.Fprintf(stderr, "Weather provider disabled: %v\n", weatherErr)
 			if unknown, buildErr := qweather.BuildWeatherState(time.Now(), settings.Providers.Weather, nil, nil); buildErr == nil {
@@ -277,7 +277,7 @@ var stdinReader = func() io.Reader { return os.Stdin }
 
 func runWeather(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: agent-beacon-bridge weather <doctor|fetch-now|fetch-hourly|snapshot|refresh|cache clear>")
+		fmt.Fprintln(stderr, "usage: agent-beacon-bridge weather <doctor|fetch-now|fetch-hourly|fetch-radiation|snapshot|refresh|cache clear>")
 		return 2
 	}
 	if args[0] == "cache" {
@@ -332,7 +332,7 @@ func runWeather(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		fmt.Fprintln(stderr, "providers.weather.enabled must be true")
 		return 1
 	}
-	provider, client, _, err := buildWeatherRuntime(weather)
+	provider, client, satelliteClient, _, err := buildWeatherRuntime(weather)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -366,6 +366,18 @@ func runWeather(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		}
 		prettyJSON(stdout, data.Raw)
 		return 0
+	case "fetch-radiation":
+		if satelliteClient == nil {
+			fmt.Fprintln(stderr, "providers.weather.satellite_radiation.enabled must be true")
+			return 1
+		}
+		data, fetchErr := satelliteClient.FetchRadiation(ctx)
+		if fetchErr != nil {
+			fmt.Fprintln(stderr, fetchErr)
+			return 1
+		}
+		prettyJSON(stdout, data.Raw)
+		return 0
 	case "snapshot":
 		patch, snapshotErr := provider.Snapshot(ctx)
 		if snapshotErr != nil {
@@ -393,26 +405,36 @@ func runWeather(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	}
 }
 
-func buildWeatherRuntime(weather config.WeatherConfig) (*qweather.Provider, *qweather.Client, *qweather.FileCache, error) {
+func buildWeatherRuntime(weather config.WeatherConfig) (*qweather.Provider, *qweather.Client, *qweather.SatelliteClient, *qweather.FileCache, error) {
 	signer, err := qweather.LoadJWTSigner(weather.PrivateKeyPath, weather.CredentialID, weather.ProjectID)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	client, err := qweather.NewClient(weather.APIHost, weather.Location, weather.Lang, signer,
 		weatherHTTPClientFactory(weather.Refresh.RequestTimeout))
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
+	}
+	var satelliteClient *qweather.SatelliteClient
+	options := make([]qweather.Option, 0, 1)
+	if weather.Satellite.Enabled {
+		satelliteClient, err = qweather.NewSatelliteClient(weather.Satellite.Latitude, weather.Satellite.Longitude,
+			weather.Timezone, weatherHTTPClientFactory(weather.Refresh.RequestTimeout))
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		options = append(options, qweather.WithRadiationClient(satelliteClient))
 	}
 	cachePath, err := qweather.DefaultCachePath()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	cache := qweather.NewFileCache(cachePath)
-	provider, err := qweather.New(weather, client, cache)
+	provider, err := qweather.New(weather, client, cache, options...)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	return provider, client, cache, nil
+	return provider, client, satelliteClient, cache, nil
 }
 
 func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) int {

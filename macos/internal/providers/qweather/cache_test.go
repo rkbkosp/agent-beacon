@@ -13,9 +13,13 @@ import (
 func TestFileCacheRoundTripsOnlyLastGoodWeatherPayloads(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "qweather-cache.json")
 	cache := NewFileCache(path)
+	targetAt := time.Date(2026, 7, 15, 12, 0, 0, 0, time.FixedZone("CST", 8*60*60))
 	records := []CacheRecord{
 		{Provider: "qweather", Endpoint: "/v7/weather/now", Location: "101210101", FetchedAt: time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC), UpdateTime: "2026-07-14T20:00+08:00", PayloadJSON: json.RawMessage(`{"code":"200","now":{"temp":"29"}}`)},
 		{Provider: "qweather", Endpoint: "/v7/weather/24h", Location: "101210101", FetchedAt: time.Date(2026, 7, 14, 12, 1, 0, 0, time.UTC), UpdateTime: "2026-07-14T20:00+08:00", PayloadJSON: json.RawMessage(`{"code":"200","hourly":[]}`)},
+		{Provider: "open-meteo", Endpoint: "/v1/archive", Location: "30.2163,120.1734", Slot: "lunch",
+			TargetAt:  &targetAt,
+			FetchedAt: time.Date(2026, 7, 15, 3, 57, 0, 0, time.UTC), PayloadJSON: json.RawMessage(satelliteFixture)},
 	}
 	if err := cache.Save(records); err != nil {
 		t.Fatal(err)
@@ -24,7 +28,9 @@ func TestFileCacheRoundTripsOnlyLastGoodWeatherPayloads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != len(records) || got[0].Endpoint != records[0].Endpoint || !bytes.Equal(got[1].PayloadJSON, records[1].PayloadJSON) {
+	if len(got) != len(records) || got[0].Endpoint != records[0].Endpoint || !bytes.Equal(got[1].PayloadJSON, records[1].PayloadJSON) ||
+		got[2].Provider != "open-meteo" || got[2].Slot != "lunch" || got[2].TargetAt == nil ||
+		records[2].TargetAt == nil || !got[2].TargetAt.Equal(*records[2].TargetAt) {
 		t.Fatalf("cache records = %+v", got)
 	}
 	raw, err := os.ReadFile(path)

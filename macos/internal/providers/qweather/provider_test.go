@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"agent-beacon/internal/config"
 	"agent-beacon/internal/protocol"
 	"agent-beacon/internal/providers"
 )
@@ -48,6 +49,17 @@ type fakeWeatherClient struct {
 	nowCalls    int
 	hourlyCalls int
 	block       <-chan struct{}
+}
+
+type fakeRadiationClient struct {
+	data  RadiationData
+	err   error
+	calls int
+}
+
+func (client *fakeRadiationClient) FetchRadiation(context.Context) (RadiationData, error) {
+	client.calls++
+	return client.data, client.err
 }
 
 func (client *fakeWeatherClient) FetchNow(ctx context.Context) (NowData, error) {
@@ -138,6 +150,87 @@ func TestNextCSTForcedRefresh(t *testing.T) {
 				t.Fatalf("next forced refresh = %s, want %s", got, test.want)
 			}
 		})
+	}
+}
+
+func TestNextRadiationRefreshUsesExactCSTCheckpoints(t *testing.T) {
+	satellite := config.Default().Providers.Weather.Satellite
+	tests := []struct {
+		name     string
+		now      time.Time
+		want     time.Time
+		wantSlot string
+	}{
+		{name: "before lunch", now: shanghaiTime(t, 2026, time.July, 15, 11, 56), want: shanghaiTime(t, 2026, time.July, 15, 11, 57), wantSlot: "lunch"},
+		{name: "after lunch", now: shanghaiTime(t, 2026, time.July, 15, 11, 57), want: shanghaiTime(t, 2026, time.July, 15, 18, 28), wantSlot: "leave"},
+		{name: "before leave from UTC", now: time.Date(2026, time.July, 15, 10, 27, 30, 0, time.UTC), want: time.Date(2026, time.July, 15, 10, 28, 0, 0, time.UTC), wantSlot: "leave"},
+		{name: "after leave", now: shanghaiTime(t, 2026, time.July, 15, 18, 28), want: shanghaiTime(t, 2026, time.July, 16, 11, 57), wantSlot: "lunch"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := nextRadiationRefresh(test.now, satellite)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !got.at.Equal(test.want) || got.slot != test.wantSlot {
+				t.Fatalf("next radiation refresh = %s %s, want %s %s", got.at, got.slot, test.want, test.wantSlot)
+			}
+		})
+	}
+}
+
+func TestRadiationRefreshAddsSunshadeDecisionNotificationAndPersistsCache(t *testing.T) {
+	weather := testWeatherConfig()
+	weather.Satellite.Enabled = true
+	now := shanghaiTime(t, 2026, time.July, 15, 11, 57)
+	weatherClient := &fakeWeatherClient{nowData: providerNow(now, 32), hourlyData: providerHourly(now, shanghaiTime(t, 2026, time.July, 15, 12, 0), false)}
+	radiationClient := &fakeRadiationClient{data: RadiationData{
+		ObservedAt: shanghaiTime(t, 2026, time.July, 15, 11, 20), GHI: 701, Direct: 502,
+		Diffuse: 190, DNI: 550, Terrestrial: 1070, DirectShare: 502.0 / 701.0,
+		FetchedAt: now, Raw: json.RawMessage(satelliteFixture),
+	}}
+	cache := &memoryCache{}
+	provider, err := New(weather, weatherClient, cache, WithRadiationClient(radiationClient),
+		WithClock(func() time.Time { return now }), WithJitter(func(value time.Duration) time.Duration { return value }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := provider.Refresh(context.Background(), true)
+	if err != nil || initial[0].Patch.Weather == nil || initial[0].Patch.Weather.NextOuting.Reason != "无雨" {
+		t.Fatalf("initial refresh = %+v, err=%v", initial, err)
+	}
+	updates, err := provider.RefreshRadiation(context.Background(), "lunch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if radiationClient.calls != 1 || len(updates) < 2 || updates[0].Patch.Weather == nil {
+		t.Fatalf("radiation updates = %+v, calls=%d", updates, radiationClient.calls)
+	}
+	outing := updates[0].Patch.Weather.NextOuting
+	if outing.UmbrellaRequired == nil || !*outing.UmbrellaRequired || outing.Reason != "遮阳" || outing.Confidence != "high" {
+		t.Fatalf("sunshade outing = %+v", outing)
+	}
+	found := false
+	for _, update := range updates {
+		if update.Notification != nil && update.Notification.Kind == "weather.umbrella_required" {
+			found = update.Notification.Source == "open-meteo" && update.Notification.SourceLabel == "Open-Meteo" && update.Notification.Detail == "遮阳"
+		}
+	}
+	if !found {
+		t.Fatalf("open-meteo umbrella notification missing: %+v", updates)
+	}
+	if len(cache.records) == 0 || cache.records[len(cache.records)-1].Provider != "open-meteo" || cache.records[len(cache.records)-1].Slot != "lunch" {
+		t.Fatalf("radiation cache records = %+v", cache.records)
+	}
+
+	restored, err := New(weather, &fakeWeatherClient{}, cache, WithRadiationClient(&fakeRadiationClient{}),
+		WithClock(func() time.Time { return now.Add(time.Minute) }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	patch, err := restored.Snapshot(context.Background())
+	if err != nil || patch.Weather == nil || patch.Weather.NextOuting.Reason != "遮阳" {
+		t.Fatalf("restored radiation snapshot = %+v, err=%v", patch.Weather, err)
 	}
 }
 
