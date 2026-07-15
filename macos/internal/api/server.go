@@ -166,6 +166,7 @@ func (server *Server) snapshotEnvelope() protocol.Envelope {
 	snapshot := server.snapshot
 	server.snapshotMu.RUnlock()
 	snapshot.Clock.ServerTime = time.Now()
+	snapshot = normalizeSnapshotTimes(snapshot)
 	envelope, _ := protocol.NewEnvelope(server.nextID("snapshot"), protocol.TypeSnapshot, server.store.Revision(), time.Now().UTC(), snapshot)
 	return envelope
 }
@@ -208,9 +209,9 @@ func (server *Server) handleFixture(writer http.ResponseWriter, request *http.Re
 		writeJSON(writer, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
-	server.applyPatch(fixture.Patch)
+	patch, _ := server.applyPatch(fixture.Patch)
 	patchRevision := server.store.NextRevision()
-	patchEnvelope, err := protocol.NewEnvelope(server.nextID("patch"), protocol.TypeStatePatch, patchRevision, time.Now().UTC(), fixture.Patch)
+	patchEnvelope, err := protocol.NewEnvelope(server.nextID("patch"), protocol.TypeStatePatch, patchRevision, time.Now().UTC(), patch)
 	if err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": "invalid fixture patch"})
 		return
@@ -236,13 +237,13 @@ func (server *Server) handleFixture(writer http.ResponseWriter, request *http.Re
 func (server *Server) PublishProviderUpdate(update providers.Update) error {
 	if update.Patch.Clock != nil || update.Patch.Codex != nil || update.Patch.Agents != nil ||
 		update.Patch.Weather != nil || update.Patch.System != nil {
-		system := server.applyPatch(update.Patch)
-		if update.Patch.System == nil {
-			update.Patch.System = &system
+		patch, system := server.applyPatch(update.Patch)
+		if patch.System == nil {
+			patch.System = &system
 		}
 		revision := server.store.NextRevision()
 		envelope, err := protocol.NewEnvelope(server.nextID("patch"), protocol.TypeStatePatch,
-			revision, time.Now().UTC(), update.Patch)
+			revision, time.Now().UTC(), patch)
 		if err != nil {
 			return fmt.Errorf("encode provider patch: %w", err)
 		}
@@ -262,9 +263,14 @@ func (server *Server) PublishProviderUpdate(update providers.Update) error {
 	return nil
 }
 
-func (server *Server) applyPatch(patch protocol.StatePatch) protocol.SystemState {
+func (server *Server) applyPatch(patch protocol.StatePatch) (protocol.StatePatch, protocol.SystemState) {
 	server.snapshotMu.Lock()
 	defer server.snapshotMu.Unlock()
+	timezone := server.snapshot.Clock.Timezone
+	if patch.Clock != nil && patch.Clock.Timezone != "" {
+		timezone = patch.Clock.Timezone
+	}
+	patch = normalizeStatePatchTimes(patch, timezone)
 	if patch.Clock != nil {
 		server.snapshot.Clock = *patch.Clock
 	}
@@ -283,7 +289,81 @@ func (server *Server) applyPatch(patch protocol.StatePatch) protocol.SystemState
 		server.snapshot.System.BridgeOnline = true
 		server.snapshot.System.OverallFreshness = overallFreshness(server.snapshot)
 	}
-	return server.snapshot.System
+	return patch, server.snapshot.System
+}
+
+func normalizeSnapshotTimes(snapshot protocol.Snapshot) protocol.Snapshot {
+	location, err := time.LoadLocation(snapshot.Clock.Timezone)
+	if err != nil {
+		return snapshot
+	}
+	snapshot.Clock.ServerTime = inLocation(snapshot.Clock.ServerTime, location)
+	snapshot.Codex = normalizeCodexTimes(snapshot.Codex, location)
+	snapshot.Agents.UpdatedAt = inLocation(snapshot.Agents.UpdatedAt, location)
+	snapshot.Weather = normalizeWeatherTimes(snapshot.Weather, location)
+	return snapshot
+}
+
+func normalizeStatePatchTimes(patch protocol.StatePatch, timezone string) protocol.StatePatch {
+	location, err := time.LoadLocation(timezone)
+	if err != nil {
+		return patch
+	}
+	if patch.Clock != nil {
+		clock := *patch.Clock
+		clock.ServerTime = inLocation(clock.ServerTime, location)
+		patch.Clock = &clock
+	}
+	if patch.Codex != nil {
+		codex := normalizeCodexTimes(*patch.Codex, location)
+		patch.Codex = &codex
+	}
+	if patch.Agents != nil {
+		agents := *patch.Agents
+		agents.UpdatedAt = inLocation(agents.UpdatedAt, location)
+		patch.Agents = &agents
+	}
+	if patch.Weather != nil {
+		weather := normalizeWeatherTimes(*patch.Weather, location)
+		patch.Weather = &weather
+	}
+	return patch
+}
+
+func normalizeCodexTimes(codex protocol.CodexState, location *time.Location) protocol.CodexState {
+	homes := append([]protocol.CodexHome(nil), codex.Homes...)
+	for index := range homes {
+		homes[index].WeeklyResetAt = timePointerInLocation(homes[index].WeeklyResetAt, location)
+		homes[index].NearestResetCardExpiresAt = timePointerInLocation(homes[index].NearestResetCardExpiresAt, location)
+		homes[index].UpdatedAt = inLocation(homes[index].UpdatedAt, location)
+	}
+	codex.Homes = homes
+	codex.Relay.UpdatedAt = inLocation(codex.Relay.UpdatedAt, location)
+	return codex
+}
+
+func normalizeWeatherTimes(weather protocol.WeatherState, location *time.Location) protocol.WeatherState {
+	weather.Current.ObservedAt = inLocation(weather.Current.ObservedAt, location)
+	weather.Lunch.TargetAt = inLocation(weather.Lunch.TargetAt, location)
+	weather.Leave.TargetAt = inLocation(weather.Leave.TargetAt, location)
+	weather.NextOuting.TargetAt = inLocation(weather.NextOuting.TargetAt, location)
+	weather.UpdatedAt = inLocation(weather.UpdatedAt, location)
+	return weather
+}
+
+func timePointerInLocation(value *time.Time, location *time.Location) *time.Time {
+	if value == nil {
+		return nil
+	}
+	converted := inLocation(*value, location)
+	return &converted
+}
+
+func inLocation(value time.Time, location *time.Location) time.Time {
+	if value.IsZero() {
+		return value
+	}
+	return value.In(location)
 }
 
 func overallFreshness(snapshot protocol.Snapshot) protocol.Freshness {

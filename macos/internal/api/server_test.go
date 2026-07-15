@@ -210,6 +210,122 @@ func TestPublishProviderUpdateBroadcastsPatchAndUpdatesSnapshot(t *testing.T) {
 	}
 }
 
+func TestSnapshotEnvelopeNormalizesTimesToClockTimezone(t *testing.T) {
+	weeklyReset := time.Date(2026, time.July, 14, 16, 30, 0, 0, time.UTC)
+	cardExpiry := time.Date(2026, time.July, 14, 23, 59, 0, 0, time.UTC)
+	snapshot := DefaultSnapshot()
+	snapshot.Clock.Timezone = "Asia/Shanghai"
+	snapshot.Codex.Homes[0].WeeklyResetAt = &weeklyReset
+	snapshot.Codex.Homes[0].NearestResetCardExpiresAt = &cardExpiry
+	snapshot.Weather.Current.ObservedAt = weeklyReset
+
+	bridge := NewServer(state.NewStore(time.Minute, 100), snapshot, testToken)
+	envelope := bridge.snapshotEnvelope()
+	if raw := string(envelope.Payload); !strings.Contains(raw, `"weekly_reset_at":"2026-07-15T00:30:00+08:00"`) ||
+		!strings.Contains(raw, `"nearest_reset_card_expires_at":"2026-07-15T07:59:00+08:00"`) {
+		t.Fatalf("snapshot payload was not timezone-normalized: %s", raw)
+	}
+	payload, err := protocol.DecodePayload[protocol.Snapshot](envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := payload.Codex.Homes[0].WeeklyResetAt.Format(time.RFC3339); got != "2026-07-15T00:30:00+08:00" {
+		t.Fatalf("weekly reset = %s", got)
+	}
+	if got := payload.Codex.Homes[0].NearestResetCardExpiresAt.Format(time.RFC3339); got != "2026-07-15T07:59:00+08:00" {
+		t.Fatalf("card expiry = %s", got)
+	}
+	if got := payload.Weather.Current.ObservedAt.Format(time.RFC3339); got != "2026-07-15T00:30:00+08:00" {
+		t.Fatalf("weather observed_at = %s", got)
+	}
+	_, clockOffset := payload.Clock.ServerTime.Zone()
+	if clockOffset != 8*60*60 {
+		t.Fatalf("clock offset = %d", clockOffset)
+	}
+	if got := snapshot.Codex.Homes[0].WeeklyResetAt.Format(time.RFC3339); got != "2026-07-14T16:30:00Z" {
+		t.Fatalf("source snapshot was mutated: %s", got)
+	}
+}
+
+func TestPublishProviderUpdateNormalizesCodexAndWeatherTimes(t *testing.T) {
+	store := state.NewStore(time.Minute, 100)
+	bridge := NewServer(store, DefaultSnapshot(), testToken)
+	server := httptest.NewServer(bridge.Handler())
+	defer server.Close()
+	connection := dialDevice(t, server.URL)
+	defer connection.Close()
+	_ = readEnvelope(t, connection)
+	hello, err := protocol.NewEnvelope("device-hello-timezone", protocol.TypeHello, 0, time.Now().UTC(), protocol.Hello{
+		Role: "device", DeviceID: "device-test", ProtocolVersion: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := connection.WriteJSON(hello); err != nil {
+		t.Fatal(err)
+	}
+	_ = readEnvelope(t, connection)
+
+	base := DefaultSnapshot()
+	weeklyReset := time.Date(2026, time.July, 14, 16, 30, 0, 0, time.UTC)
+	cardExpiry := time.Date(2026, time.July, 14, 23, 59, 0, 0, time.UTC)
+	base.Codex.Homes[0].WeeklyResetAt = &weeklyReset
+	base.Codex.Homes[0].NearestResetCardExpiresAt = &cardExpiry
+	base.Weather.Current.ObservedAt = weeklyReset
+	base.Weather.Lunch.TargetAt = cardExpiry
+	base.Weather.NextOuting.TargetAt = cardExpiry
+	if err := bridge.PublishProviderUpdate(providers.Update{Patch: protocol.StatePatch{Codex: &base.Codex}}); err != nil {
+		t.Fatal(err)
+	}
+
+	codexEnvelope := readEnvelope(t, connection)
+	if raw := string(codexEnvelope.Payload); !strings.Contains(raw, `"weekly_reset_at":"2026-07-15T00:30:00+08:00"`) ||
+		!strings.Contains(raw, `"nearest_reset_card_expires_at":"2026-07-15T07:59:00+08:00"`) {
+		t.Fatalf("Codex patch payload was not timezone-normalized: %s", raw)
+	}
+	codexPatch, err := protocol.DecodePayload[protocol.StatePatch](codexEnvelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if codexPatch.Clock != nil || codexPatch.Codex == nil || codexPatch.Weather != nil {
+		t.Fatalf("Codex-only provider patch domains = %+v", codexPatch)
+	}
+	if got := codexPatch.Codex.Homes[0].WeeklyResetAt.Format(time.RFC3339); got != "2026-07-15T00:30:00+08:00" {
+		t.Fatalf("weekly reset = %s", got)
+	}
+	if got := codexPatch.Codex.Homes[0].NearestResetCardExpiresAt.Format(time.RFC3339); got != "2026-07-15T07:59:00+08:00" {
+		t.Fatalf("card expiry = %s", got)
+	}
+
+	if err := bridge.PublishProviderUpdate(providers.Update{Patch: protocol.StatePatch{Weather: &base.Weather}}); err != nil {
+		t.Fatal(err)
+	}
+	weatherEnvelope := readEnvelope(t, connection)
+	if raw := string(weatherEnvelope.Payload); !strings.Contains(raw, `"observed_at":"2026-07-15T00:30:00+08:00"`) ||
+		!strings.Contains(raw, `"target_at":"2026-07-15T07:59:00+08:00"`) {
+		t.Fatalf("weather patch payload was not timezone-normalized: %s", raw)
+	}
+	weatherPatch, err := protocol.DecodePayload[protocol.StatePatch](weatherEnvelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if weatherPatch.Clock != nil || weatherPatch.Codex != nil || weatherPatch.Weather == nil {
+		t.Fatalf("weather-only provider patch domains = %+v", weatherPatch)
+	}
+	if got := weatherPatch.Weather.Current.ObservedAt.Format(time.RFC3339); got != "2026-07-15T00:30:00+08:00" {
+		t.Fatalf("weather observed_at = %s", got)
+	}
+	if got := weatherPatch.Weather.Lunch.TargetAt.Format(time.RFC3339); got != "2026-07-15T07:59:00+08:00" {
+		t.Fatalf("weather lunch target_at = %s", got)
+	}
+	if got := weatherPatch.Weather.NextOuting.TargetAt.Format(time.RFC3339); got != "2026-07-15T07:59:00+08:00" {
+		t.Fatalf("next outing target_at = %s", got)
+	}
+	if got := base.Codex.Homes[0].WeeklyResetAt.Format(time.RFC3339); got != "2026-07-14T16:30:00Z" {
+		t.Fatalf("provider state was mutated: %s", got)
+	}
+}
+
 func TestProviderUpdatesRecomputeOverallFreshness(t *testing.T) {
 	now := time.Now()
 	snapshot := DefaultSnapshot()
