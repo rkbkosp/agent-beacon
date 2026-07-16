@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"agent-beacon/internal/config"
 )
 
 func TestRenderLaunchAgentUsesAbsoluteStablePathsAndEscapesXML(t *testing.T) {
@@ -17,6 +20,24 @@ func TestRenderLaunchAgentUsesAbsoluteStablePathsAndEscapesXML(t *testing.T) {
 	} {
 		if !strings.Contains(plist, required) {
 			t.Fatalf("plist missing %q: %s", required, plist)
+		}
+	}
+}
+
+func TestRenderTokenRateLaunchAgentUsesConfiguredPrivatePaths(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "User & Test")
+	paths := defaultServicePaths(home)
+	plist := renderTokenRateLaunchAgent(paths, home, config.CodexTokenRateConfig{
+		SocketPath: filepath.Join(home, "rate & live.sock"),
+		StateFile:  filepath.Join(home, "rate & live.json"),
+		StaleAfter: 2 * time.Second,
+	})
+	for _, required := range []string{
+		tokenRateLaunchAgentLabel, "codex-token-rate-daemon", "rate &amp; live.sock",
+		"rate &amp; live.json", "token-rate.stderr.log", "<key>KeepAlive</key><true/>",
+	} {
+		if !strings.Contains(plist, required) {
+			t.Fatalf("token-rate plist missing %q: %s", required, plist)
 		}
 	}
 }

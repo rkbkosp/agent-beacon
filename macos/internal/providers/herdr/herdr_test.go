@@ -42,6 +42,9 @@ func TestMapSnapshotMatchesHerdrPriorityPanel(t *testing.T) {
 	if !state.Connected || state.Provider != "herdr" || len(state.Items) != 5 {
 		t.Fatalf("state = %+v", state)
 	}
+	if !state.CodexActive {
+		t.Fatal("working Codex session was not marked active")
+	}
 	wantOrder := []protocol.AgentStatus{
 		protocol.AgentBlocked, protocol.AgentDone, protocol.AgentWorking,
 		protocol.AgentIdle, protocol.AgentUnknown,
@@ -59,6 +62,71 @@ func TestMapSnapshotMatchesHerdrPriorityPanel(t *testing.T) {
 	}
 	if state.Items[0].AgentSession == nil || state.Items[0].AgentSession.Value != "session-1" {
 		t.Fatalf("agent session was not preserved: %+v", state.Items[0].AgentSession)
+	}
+}
+
+func TestActiveCodexSessionUsesHerdrIdentityAndWorkingStatus(t *testing.T) {
+	tests := []struct {
+		name  string
+		agent agentInfo
+		want  bool
+	}{
+		{
+			name: "session source",
+			agent: agentInfo{AgentStatus: "working",
+				AgentSession: &agentSessionInfo{Source: "herdr:codex"}},
+			want: true,
+		},
+		{
+			name: "session agent",
+			agent: agentInfo{AgentStatus: "working",
+				AgentSession: &agentSessionInfo{Source: "herdr:other", Agent: "Codex"}},
+			want: true,
+		},
+		{name: "top-level fallback", agent: agentInfo{Agent: "CODEX", AgentStatus: "working"}, want: true},
+		{name: "blocked Codex", agent: agentInfo{Agent: "codex", AgentStatus: "blocked"}},
+		{name: "idle Codex", agent: agentInfo{Agent: "codex", AgentStatus: "idle"}},
+		{name: "working other agent", agent: agentInfo{Agent: "claude", AgentStatus: "working"}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := activeCodexSession(test.agent); got != test.want {
+				t.Fatalf("activeCodexSession(%+v) = %v, want %v", test.agent, got, test.want)
+			}
+		})
+	}
+}
+
+func TestMapSnapshotAggregatesAnyWorkingCodexSession(t *testing.T) {
+	tests := []struct {
+		name   string
+		agents []agentInfo
+		want   bool
+	}{
+		{name: "empty"},
+		{name: "blocked Codex", agents: []agentInfo{{PaneID: "p1", Agent: "codex", AgentStatus: "blocked"}}},
+		{name: "working non-Codex", agents: []agentInfo{{PaneID: "p1", Agent: "claude", AgentStatus: "working"}}},
+		{
+			name: "one working Codex among inactive sessions",
+			agents: []agentInfo{
+				{PaneID: "p1", Agent: "codex", AgentStatus: "idle"},
+				{PaneID: "p2", AgentStatus: "working", AgentSession: &agentSessionInfo{Source: "herdr:codex"}},
+			},
+			want: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state, err := mapSnapshot(sessionSnapshot{Agents: test.agents}, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.CodexActive != test.want {
+				t.Fatalf("CodexActive = %v, want %v", state.CodexActive, test.want)
+			}
+		})
 	}
 }
 

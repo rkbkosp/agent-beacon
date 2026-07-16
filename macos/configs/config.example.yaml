@@ -28,6 +28,12 @@ providers:
       command: ["@bridge", "codex-adapter"]
       timeout: 10s
       max_stdout_bytes: 65536
+    token_rate:
+      enabled: true
+      socket_path: "~/Library/Application Support/AgentBeacon/codex-token-rate.sock"
+      state_file: "~/Library/Application Support/AgentBeacon/codex-token-rate.json"
+      refresh_interval: 200ms
+      stale_after: 2s
   relay_balance:
     enabled: true
     endpoint: https://api.0-0.pro/v1/usage

@@ -339,6 +339,7 @@ func normalizeCodexTimes(codex protocol.CodexState, location *time.Location) pro
 	}
 	codex.Homes = homes
 	codex.Relay.UpdatedAt = inLocation(codex.Relay.UpdatedAt, location)
+	codex.TokenRate.UpdatedAt = timePointerInLocation(codex.TokenRate.UpdatedAt, location)
 	return codex
 }
 
@@ -372,6 +373,9 @@ func overallFreshness(snapshot protocol.Snapshot) protocol.Freshness {
 		values = append(values, home.Freshness)
 	}
 	values = append(values, snapshot.Codex.Relay.Freshness, snapshot.Weather.Current.Freshness)
+	if snapshot.Codex.TokenRate.Freshness != protocol.FreshnessUnknown {
+		values = append(values, snapshot.Codex.TokenRate.Freshness)
+	}
 	if !snapshot.Agents.Connected {
 		values = append(values, protocol.FreshnessStale)
 	}

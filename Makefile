@@ -4,11 +4,13 @@ PORT ?=
 BACKUP ?=
 DEMO_DIR ?=
 IDF_ACTIVATE ?= $(HOME)/.espressif/tools/activate_idf_v5.5.4.sh
+TOKEN_RATE_DAEMON ?= $(HOME)/.local/bin/codex-token-rate-daemon
+TOKEN_RATE_DIR ?= $(HOME)/Library/Application Support/AgentBeacon
 
 .PHONY: doctor detect-device backup-factory restore-factory official-demo-build \
 	firmware-build firmware-flash firmware-monitor bridge-build bridge-run \
 	bridge-install bridge-service-install bridge-service-uninstall bridge-service-restart \
-	bridge-service-status demo-events test
+	bridge-service-status token-rate-run token-rate-service-status demo-events test
 
 doctor:
 	@IDF_ACTIVATION_SCRIPT="$(IDF_ACTIVATE)" ./scripts/doctor.sh
@@ -83,6 +85,16 @@ bridge-service-restart:
 
 bridge-service-status:
 	@/bin/launchctl print "gui/$$(id -u)/com.stepatero.agentbeacon"
+
+token-rate-run:
+	@test -x "$(TOKEN_RATE_DAEMON)" || (printf 'error: patched daemon not found at %s\n' "$(TOKEN_RATE_DAEMON)" >&2; exit 2)
+	@mkdir -p "$(TOKEN_RATE_DIR)"
+	@"$(TOKEN_RATE_DAEMON)" \
+		--socket "$(TOKEN_RATE_DIR)/codex-token-rate.sock" \
+		--state-file "$(TOKEN_RATE_DIR)/codex-token-rate.json" --stdout
+
+token-rate-service-status:
+	@/bin/launchctl print "gui/$$(id -u)/com.stepatero.agentbeacon.tokenrate"
 
 demo-events:
 	@./scripts/emit-demo-events.sh

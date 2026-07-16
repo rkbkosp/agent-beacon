@@ -41,12 +41,21 @@ type CodexAdapterConfig struct {
 	MaxStdoutBytes int64
 }
 
+type CodexTokenRateConfig struct {
+	Enabled         bool
+	SocketPath      string
+	StateFile       string
+	RefreshInterval time.Duration
+	StaleAfter      time.Duration
+}
+
 type CodexProviderConfig struct {
 	Enabled         bool
 	RefreshInterval time.Duration
 	StaleAfter      time.Duration
 	Homes           []CodexHomeConfig
 	Adapter         CodexAdapterConfig
+	TokenRate       CodexTokenRateConfig
 }
 
 type RelayBalanceConfig struct {
@@ -171,6 +180,13 @@ type rawConfig struct {
 				Timeout        string   `yaml:"timeout"`
 				MaxStdoutBytes int64    `yaml:"max_stdout_bytes"`
 			} `yaml:"adapter"`
+			TokenRate struct {
+				Enabled         *bool  `yaml:"enabled"`
+				SocketPath      string `yaml:"socket_path"`
+				StateFile       string `yaml:"state_file"`
+				RefreshInterval string `yaml:"refresh_interval"`
+				StaleAfter      string `yaml:"stale_after"`
+			} `yaml:"token_rate"`
 		} `yaml:"codex"`
 		RelayBalance struct {
 			Enabled         *bool  `yaml:"enabled"`
@@ -247,7 +263,8 @@ func Default() Config {
 			Mock: MockProviderConfig{Enabled: false},
 			Codex: CodexProviderConfig{
 				RefreshInterval: time.Minute, StaleAfter: 3 * time.Minute,
-				Adapter: CodexAdapterConfig{Timeout: 10 * time.Second, MaxStdoutBytes: 64 * 1024},
+				Adapter:   CodexAdapterConfig{Timeout: 10 * time.Second, MaxStdoutBytes: 64 * 1024},
+				TokenRate: CodexTokenRateConfig{RefreshInterval: 200 * time.Millisecond, StaleAfter: 2 * time.Second},
 			},
 			RelayBalance: RelayBalanceConfig{
 				Endpoint: "https://api.0-0.pro/v1/usage", SecretName: "zero-api-key",
@@ -407,6 +424,29 @@ func applyRawCodex(codex *CodexProviderConfig, raw *rawConfig) error {
 			codex.Adapter.Command[0] = executable
 		}
 	}
+	if value.TokenRate.Enabled != nil {
+		codex.TokenRate.Enabled = *value.TokenRate.Enabled
+	}
+	if value.TokenRate.StateFile != "" {
+		codex.TokenRate.StateFile = expandUserPath(value.TokenRate.StateFile)
+	}
+	if value.TokenRate.SocketPath != "" {
+		codex.TokenRate.SocketPath = expandUserPath(value.TokenRate.SocketPath)
+	}
+	if value.TokenRate.RefreshInterval != "" {
+		parsed, err := positiveDuration("providers.codex.token_rate.refresh_interval", value.TokenRate.RefreshInterval)
+		if err != nil {
+			return err
+		}
+		codex.TokenRate.RefreshInterval = parsed
+	}
+	if value.TokenRate.StaleAfter != "" {
+		parsed, err := positiveDuration("providers.codex.token_rate.stale_after", value.TokenRate.StaleAfter)
+		if err != nil {
+			return err
+		}
+		codex.TokenRate.StaleAfter = parsed
+	}
 	if value.Homes != nil {
 		codex.Homes = make([]CodexHomeConfig, 0, len(value.Homes))
 		for _, home := range value.Homes {
@@ -416,6 +456,9 @@ func applyRawCodex(codex *CodexProviderConfig, raw *rawConfig) error {
 		}
 	}
 	if !codex.Enabled {
+		if codex.TokenRate.Enabled {
+			return fmt.Errorf("providers.codex.token_rate requires providers.codex.enabled")
+		}
 		return nil
 	}
 	if len(codex.Homes) < 1 || len(codex.Homes) > 2 {
@@ -442,6 +485,20 @@ func applyRawCodex(codex *CodexProviderConfig, raw *rawConfig) error {
 	}
 	if codex.Adapter.MaxStdoutBytes < 1024 || codex.Adapter.MaxStdoutBytes > 4*1024*1024 {
 		return fmt.Errorf("providers.codex.adapter.max_stdout_bytes must be between 1024 and 4194304")
+	}
+	if codex.TokenRate.Enabled {
+		if codex.TokenRate.SocketPath == "" || !filepath.IsAbs(codex.TokenRate.SocketPath) {
+			return fmt.Errorf("providers.codex.token_rate.socket_path must resolve to an absolute path")
+		}
+		if codex.TokenRate.StateFile == "" || !filepath.IsAbs(codex.TokenRate.StateFile) {
+			return fmt.Errorf("providers.codex.token_rate.state_file must resolve to an absolute path")
+		}
+		if codex.TokenRate.StaleAfter <= codex.TokenRate.RefreshInterval {
+			return fmt.Errorf("providers.codex.token_rate.stale_after must exceed refresh_interval")
+		}
+		if codex.TokenRate.SocketPath == codex.TokenRate.StateFile {
+			return fmt.Errorf("providers.codex.token_rate socket_path and state_file must differ")
+		}
 	}
 	return nil
 }

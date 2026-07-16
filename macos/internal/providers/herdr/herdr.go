@@ -273,6 +273,7 @@ func (provider *Provider) publishIfChanged(ctx context.Context, out chan<- provi
 	previous := provider.last
 	hadState := provider.hasState
 	changed := !provider.hasState || provider.last.Connected != state.Connected ||
+		provider.last.CodexActive != state.CodexActive ||
 		!reflect.DeepEqual(provider.last.Items, state.Items)
 	if changed {
 		provider.last = state
@@ -356,6 +357,7 @@ func (provider *Provider) publishDisconnected(ctx context.Context, out chan<- pr
 		state = protocol.AgentsState{Provider: "herdr"}
 	}
 	state.Connected = false
+	state.CodexActive = false
 	state.UpdatedAt = time.Now()
 	return provider.publishIfChanged(ctx, out, state)
 }
@@ -379,6 +381,7 @@ func mapSnapshot(snapshot sessionSnapshot, now time.Time) (protocol.AgentsState,
 	}
 
 	items := make([]protocol.AgentItem, 0, len(snapshot.Agents))
+	codexActive := false
 	for _, agent := range snapshot.Agents {
 		status := protocol.AgentStatus(agent.AgentStatus)
 		if agent.PaneID == "" || !validAgentStatus(status) {
@@ -411,6 +414,7 @@ func mapSnapshot(snapshot sessionSnapshot, now time.Time) (protocol.AgentsState,
 			}
 		}
 		items = append(items, item)
+		codexActive = codexActive || activeCodexSession(agent)
 	}
 
 	sort.SliceStable(items, func(left, right int) bool {
@@ -428,8 +432,21 @@ func mapSnapshot(snapshot sessionSnapshot, now time.Time) (protocol.AgentsState,
 	})
 
 	return protocol.AgentsState{
-		Provider: "herdr", Connected: true, UpdatedAt: now, Items: items,
+		Provider: "herdr", Connected: true, CodexActive: codexActive,
+		UpdatedAt: now, Items: items,
 	}, nil
+}
+
+func activeCodexSession(agent agentInfo) bool {
+	if agent.AgentStatus != string(protocol.AgentWorking) {
+		return false
+	}
+	if agent.AgentSession != nil &&
+		(strings.EqualFold(strings.TrimSpace(agent.AgentSession.Agent), "codex") ||
+			strings.EqualFold(strings.TrimSpace(agent.AgentSession.Source), "herdr:codex")) {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(agent.Agent), "codex")
 }
 
 func validAgentStatus(status protocol.AgentStatus) bool {

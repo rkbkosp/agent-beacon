@@ -21,15 +21,20 @@ import (
 	"agent-beacon/internal/secrets"
 )
 
-const launchAgentLabel = "com.stepatero.agentbeacon"
+const (
+	launchAgentLabel          = "com.stepatero.agentbeacon"
+	tokenRateLaunchAgentLabel = "com.stepatero.agentbeacon.tokenrate"
+)
 
 type servicePaths struct {
-	ApplicationDir string
-	Binary         string
-	Config         string
-	Token          string
-	Logs           string
-	Plist          string
+	ApplicationDir  string
+	Binary          string
+	TokenRateBinary string
+	Config          string
+	Token           string
+	Logs            string
+	Plist           string
+	TokenRatePlist  string
 }
 
 func runInstallService(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -37,6 +42,7 @@ func runInstallService(ctx context.Context, args []string, stdout, stderr io.Wri
 	flags.SetOutput(stderr)
 	configSource := flags.String("config", "configs/config.local.yaml", "source configuration file")
 	tokenSource := flags.String("token-file", "configs/token.local", "source bridge token file")
+	tokenRateSource := flags.String("token-rate-daemon", "", "patched codex-token-rate-daemon binary")
 	if flags.Parse(args) != nil {
 		return 2
 	}
@@ -74,6 +80,77 @@ func runInstallService(ctx context.Context, args []string, stdout, stderr io.Wri
 		fmt.Fprintf(stderr, "validate installed config: %v\n", err)
 		return 1
 	}
+	if settings.Providers.Codex.TokenRate.Enabled {
+		source := *tokenRateSource
+		if source == "" {
+			source = filepath.Join(home, ".local", "bin", "codex-token-rate-daemon")
+		}
+		if err := copyFile(source, paths.TokenRateBinary, 0o755); err != nil {
+			fmt.Fprintf(stderr, "install token-rate daemon: %v\n", err)
+			return 1
+		}
+		for _, directory := range []string{
+			filepath.Dir(settings.Providers.Codex.TokenRate.SocketPath),
+			filepath.Dir(settings.Providers.Codex.TokenRate.StateFile),
+		} {
+			if err := os.MkdirAll(directory, 0o700); err != nil {
+				fmt.Fprintf(stderr, "prepare token-rate directory: %v\n", err)
+				return 1
+			}
+		}
+		tokenRatePlist := renderTokenRateLaunchAgent(paths, home, settings.Providers.Codex.TokenRate)
+		if err := writeAtomic(paths.TokenRatePlist, []byte(tokenRatePlist), 0o644); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if output, err := exec.CommandContext(ctx, "/usr/bin/plutil", "-lint", paths.TokenRatePlist).CombinedOutput(); err != nil {
+			fmt.Fprintf(stderr, "validate token-rate LaunchAgent: %v: %s\n", err, strings.TrimSpace(string(output)))
+			return 1
+		}
+		domain := "gui/" + strconv.Itoa(os.Getuid())
+		service := domain + "/" + tokenRateLaunchAgentLabel
+		_ = exec.CommandContext(ctx, "/bin/launchctl", "bootout", service).Run()
+		if err := waitForLaunchAgentRemoval(ctx, service, 5*time.Second); err != nil {
+			fmt.Fprintf(stderr, "wait for previous token-rate LaunchAgent removal: %v\n", err)
+			return 1
+		}
+		if err := os.Remove(settings.Providers.Codex.TokenRate.StateFile); err != nil && !errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(stderr, "remove old token-rate state: %v\n", err)
+			return 1
+		}
+		startedAt := time.Now()
+		if err := bootstrapLaunchAgent(ctx, domain, paths.TokenRatePlist, 5); err != nil {
+			fmt.Fprintf(stderr, "token-rate launchctl bootstrap: %v\n", err)
+			return 1
+		}
+		_ = exec.CommandContext(ctx, "/bin/launchctl", "enable", service).Run()
+		if output, err := exec.CommandContext(ctx, "/bin/launchctl", "kickstart", "-k", service).CombinedOutput(); err != nil {
+			fmt.Fprintf(stderr, "token-rate launchctl kickstart: %v: %s\n", err, strings.TrimSpace(string(output)))
+			return 1
+		}
+		if err := waitForFreshFile(ctx, settings.Providers.Codex.TokenRate.StateFile, startedAt, 5*time.Second); err != nil {
+			fmt.Fprintf(stderr, "token-rate LaunchAgent started but state file is unavailable: %v\n", err)
+			return 1
+		}
+		if output, err := exec.CommandContext(ctx, "/bin/launchctl", "setenv", "CODEX_TOKEN_RATE_SOCKET",
+			settings.Providers.Codex.TokenRate.SocketPath).CombinedOutput(); err != nil {
+			fmt.Fprintf(stderr, "publish CODEX_TOKEN_RATE_SOCKET: %v: %s\n", err, strings.TrimSpace(string(output)))
+			return 1
+		}
+	} else {
+		domain := "gui/" + strconv.Itoa(os.Getuid())
+		_ = exec.CommandContext(ctx, "/bin/launchctl", "bootout", domain+"/"+tokenRateLaunchAgentLabel).Run()
+		if err := os.Remove(paths.TokenRatePlist); err != nil && !errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(stderr, "remove disabled token-rate LaunchAgent: %v\n", err)
+			return 1
+		}
+		if settings.Providers.Codex.TokenRate.SocketPath != "" {
+			if output, err := exec.CommandContext(ctx, "/bin/launchctl", "getenv", "CODEX_TOKEN_RATE_SOCKET").Output(); err == nil &&
+				strings.TrimSpace(string(output)) == settings.Providers.Codex.TokenRate.SocketPath {
+				_ = exec.CommandContext(ctx, "/bin/launchctl", "unsetenv", "CODEX_TOKEN_RATE_SOCKET").Run()
+			}
+		}
+	}
 	plist := renderLaunchAgent(paths, home)
 	if err := writeAtomic(paths.Plist, []byte(plist), 0o644); err != nil {
 		fmt.Fprintln(stderr, err)
@@ -105,6 +182,10 @@ func runInstallService(ctx context.Context, args []string, stdout, stderr io.Wri
 		return 1
 	}
 	fmt.Fprintf(stdout, "Installed and started %s\n", launchAgentLabel)
+	if settings.Providers.Codex.TokenRate.Enabled {
+		fmt.Fprintf(stdout, "Installed and started %s; restart patched Codex processes to inherit CODEX_TOKEN_RATE_SOCKET\n",
+			tokenRateLaunchAgentLabel)
+	}
 	fmt.Fprintf(stdout, "Config: %s\nLogs: %s\n", paths.Config, paths.Logs)
 	return 0
 }
@@ -160,10 +241,20 @@ func runUninstallService(ctx context.Context, args []string, stdout, stderr io.W
 	}
 	paths := defaultServicePaths(home)
 	domain := "gui/" + strconv.Itoa(os.Getuid())
+	settings, _ := config.LoadProviders(paths.Config)
+	_ = exec.CommandContext(ctx, "/bin/launchctl", "bootout", domain+"/"+tokenRateLaunchAgentLabel).Run()
 	_ = exec.CommandContext(ctx, "/bin/launchctl", "bootout", domain+"/"+launchAgentLabel).Run()
-	if err := os.Remove(paths.Plist); err != nil && !errors.Is(err, os.ErrNotExist) {
-		fmt.Fprintln(stderr, err)
-		return 1
+	for _, plist := range []string{paths.Plist, paths.TokenRatePlist} {
+		if err := os.Remove(plist); err != nil && !errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
+	if settings.Providers.Codex.TokenRate.SocketPath != "" {
+		if output, err := exec.CommandContext(ctx, "/bin/launchctl", "getenv", "CODEX_TOKEN_RATE_SOCKET").Output(); err == nil &&
+			strings.TrimSpace(string(output)) == settings.Providers.Codex.TokenRate.SocketPath {
+			_ = exec.CommandContext(ctx, "/bin/launchctl", "unsetenv", "CODEX_TOKEN_RATE_SOCKET").Run()
+		}
 	}
 	if *purge {
 		_ = os.RemoveAll(paths.ApplicationDir)
@@ -177,13 +268,48 @@ func runUninstallService(ctx context.Context, args []string, stdout, stderr io.W
 func defaultServicePaths(home string) servicePaths {
 	application := filepath.Join(home, "Library", "Application Support", "AgentBeacon")
 	return servicePaths{
-		ApplicationDir: application,
-		Binary:         filepath.Join(application, "bin", "agent-beacon-bridge"),
-		Config:         filepath.Join(application, "config.yaml"),
-		Token:          filepath.Join(application, "token"),
-		Logs:           filepath.Join(home, "Library", "Logs", "AgentBeacon"),
-		Plist:          filepath.Join(home, "Library", "LaunchAgents", launchAgentLabel+".plist"),
+		ApplicationDir:  application,
+		Binary:          filepath.Join(application, "bin", "agent-beacon-bridge"),
+		TokenRateBinary: filepath.Join(application, "bin", "codex-token-rate-daemon"),
+		Config:          filepath.Join(application, "config.yaml"),
+		Token:           filepath.Join(application, "token"),
+		Logs:            filepath.Join(home, "Library", "Logs", "AgentBeacon"),
+		Plist:           filepath.Join(home, "Library", "LaunchAgents", launchAgentLabel+".plist"),
+		TokenRatePlist:  filepath.Join(home, "Library", "LaunchAgents", tokenRateLaunchAgentLabel+".plist"),
 	}
+}
+
+func renderTokenRateLaunchAgent(paths servicePaths, home string, tokenRate config.CodexTokenRateConfig) string {
+	escape := func(value string) string {
+		var output bytes.Buffer
+		_ = xml.EscapeText(&output, []byte(value))
+		return output.String()
+	}
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>%s</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>%s</string>
+    <string>--socket</string><string>%s</string>
+    <string>--state-file</string><string>%s</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Background</string>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>EnvironmentVariables</key>
+  <dict><key>HOME</key><string>%s</string></dict>
+  <key>StandardOutPath</key><string>%s</string>
+  <key>StandardErrorPath</key><string>%s</string>
+</dict>
+</plist>
+`, tokenRateLaunchAgentLabel, escape(paths.TokenRateBinary), escape(tokenRate.SocketPath),
+		escape(tokenRate.StateFile), escape(home),
+		escape(filepath.Join(paths.Logs, "token-rate.stdout.log")),
+		escape(filepath.Join(paths.Logs, "token-rate.stderr.log")))
 }
 
 func renderLaunchAgent(paths servicePaths, home string) string {
@@ -221,6 +347,22 @@ func renderLaunchAgent(paths servicePaths, home string) string {
 </plist>
 `, launchAgentLabel, escape(paths.Binary), escape(paths.Config), escape(paths.ApplicationDir),
 		escape(home), escape(filepath.Join(paths.Logs, "stdout.log")), escape(filepath.Join(paths.Logs, "stderr.log")))
+}
+
+func waitForFreshFile(ctx context.Context, path string, startedAt time.Time, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && info.Size() > 0 &&
+			!info.ModTime().Before(startedAt.Add(-time.Second)) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("%s was not refreshed within %s", path, timeout)
 }
 
 func copyFile(source, destination string, mode os.FileMode) error {

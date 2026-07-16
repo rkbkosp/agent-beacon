@@ -92,6 +92,12 @@ providers:
       command: ["/usr/bin/true"]
       timeout: 10s
       max_stdout_bytes: 65536
+    token_rate:
+      enabled: true
+      socket_path: "~/token-rate.sock"
+      state_file: "~/token-rate.json"
+      refresh_interval: 200ms
+      stale_after: 2s
   relay_balance:
     enabled: true
     endpoint: https://api.0-0.pro/v1/usage
@@ -113,6 +119,11 @@ providers:
 	if got.Providers.Codex.Homes[0].Path != filepath.Join(home, ".codex") {
 		t.Fatalf("home path = %q", got.Providers.Codex.Homes[0].Path)
 	}
+	if !got.Providers.Codex.TokenRate.Enabled || got.Providers.Codex.TokenRate.SocketPath != filepath.Join(home, "token-rate.sock") ||
+		got.Providers.Codex.TokenRate.StateFile != filepath.Join(home, "token-rate.json") ||
+		got.Providers.Codex.TokenRate.RefreshInterval != 200*time.Millisecond || got.Providers.Codex.TokenRate.StaleAfter != 2*time.Second {
+		t.Fatalf("token-rate config = %+v", got.Providers.Codex.TokenRate)
+	}
 }
 
 func TestLoadRejectsUnknownKeys(t *testing.T) {
@@ -122,6 +133,26 @@ func TestLoadRejectsUnknownKeys(t *testing.T) {
 	}
 	if _, err := Load(path); err == nil {
 		t.Fatal("expected unknown config key to fail")
+	}
+}
+
+func TestLoadRejectsTokenRateWithoutCodexProvider(t *testing.T) {
+	t.Setenv("AGENT_BEACON_TOKEN", "bridge-secret")
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	contents := `
+providers:
+  codex:
+    enabled: false
+    token_rate:
+      enabled: true
+      socket_path: /tmp/codex-token-rate.sock
+      state_file: /tmp/codex-token-rate.json
+`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "requires providers.codex.enabled") {
+		t.Fatalf("expected token-rate dependency error, got %v", err)
 	}
 }
 

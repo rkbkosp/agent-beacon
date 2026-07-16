@@ -36,6 +36,11 @@ type Provider struct {
 	relayStartedAt       time.Time
 	relayInvalidNotified bool
 	relayStaleNotified   bool
+	tokenRateState       protocol.TokenRateState
+	tokenRateStartedAt   time.Time
+	tokenRateLastSuccess time.Time
+	tokenRateHasSuccess  bool
+	readTokenRate        func(string, time.Time, time.Duration) (protocol.TokenRateState, error)
 	initialized          bool
 	health               providers.Health
 }
@@ -59,10 +64,13 @@ func New(providerConfig config.CodexProviderConfig, relayConfig config.RelayBala
 	now := time.Now()
 	value := &Provider{
 		config: providerConfig, relayConfig: relayConfig, relay: relay, now: time.Now,
-		homes:          make(map[string]*homeRuntime, len(providerConfig.Homes)),
-		relayState:     protocol.RelayState{Unit: "USD", UpdatedAt: now, Freshness: protocol.FreshnessUnknown},
-		relayStartedAt: now,
-		health:         providers.Health{Healthy: false, Detail: "waiting for Codex and relay data"},
+		homes:              make(map[string]*homeRuntime, len(providerConfig.Homes)),
+		relayState:         protocol.RelayState{Unit: "USD", UpdatedAt: now, Freshness: protocol.FreshnessUnknown},
+		relayStartedAt:     now,
+		tokenRateState:     protocol.TokenRateState{Estimated: true, Freshness: protocol.FreshnessUnknown},
+		tokenRateStartedAt: now,
+		readTokenRate:      readTokenRateState,
+		health:             providers.Health{Healthy: false, Detail: "waiting for Codex and relay data"},
 	}
 	for _, home := range providerConfig.Homes {
 		value.homes[home.ID] = &homeRuntime{startedAt: now, thresholdArmed: make(map[int]bool), state: protocol.CodexHome{
@@ -106,6 +114,13 @@ func (provider *Provider) Start(ctx context.Context, out chan<- providers.Update
 		relayChannel = relayTicker.C
 		defer relayTicker.Stop()
 	}
+	var tokenRateTicker *time.Ticker
+	var tokenRateChannel <-chan time.Time
+	if provider.config.TokenRate.Enabled {
+		tokenRateTicker = time.NewTicker(provider.config.TokenRate.RefreshInterval)
+		tokenRateChannel = tokenRateTicker.C
+		defer tokenRateTicker.Stop()
+	}
 	for {
 		var updates []providers.Update
 		select {
@@ -115,6 +130,8 @@ func (provider *Provider) Start(ctx context.Context, out chan<- providers.Update
 			updates, _ = provider.refreshHomes(ctx, true)
 		case <-relayChannel:
 			updates, _ = provider.refreshRelay(ctx, true)
+		case <-tokenRateChannel:
+			updates, _ = provider.refreshTokenRate()
 		}
 		if err := sendUpdates(ctx, out, updates); err != nil {
 			return err
@@ -131,8 +148,10 @@ func (provider *Provider) Health(context.Context) providers.Health {
 func (provider *Provider) refreshAll(ctx context.Context, notify bool) ([]providers.Update, error) {
 	homeUpdates, homeErr := provider.refreshHomes(ctx, notify)
 	relayUpdates, relayErr := provider.refreshRelay(ctx, notify)
+	tokenRateUpdates, tokenRateErr := provider.refreshTokenRate()
 	updates := append(homeUpdates, relayUpdates...)
-	return updates, errors.Join(homeErr, relayErr)
+	updates = append(updates, tokenRateUpdates...)
+	return updates, errors.Join(homeErr, relayErr, tokenRateErr)
 }
 
 func (provider *Provider) refreshHomes(ctx context.Context, notify bool) ([]providers.Update, error) {
@@ -262,7 +281,7 @@ func (provider *Provider) stateLocked() protocol.CodexState {
 	for _, configured := range provider.config.Homes {
 		homes = append(homes, provider.homes[configured.ID].state)
 	}
-	return protocol.CodexState{Homes: homes, Relay: provider.relayState}
+	return protocol.CodexState{Homes: homes, Relay: provider.relayState, TokenRate: provider.tokenRateState}
 }
 
 func (provider *Provider) updateHealthLocked(err error) {
@@ -280,7 +299,55 @@ func (provider *Provider) updateHealthLocked(err error) {
 		provider.health = providers.Health{Healthy: false, Detail: "relay balance is not fresh"}
 		return
 	}
-	provider.health = providers.Health{Healthy: true, Detail: "Codex homes and relay balance are available"}
+	if provider.config.TokenRate.Enabled && provider.tokenRateState.Freshness != protocol.FreshnessFresh {
+		provider.health = providers.Health{Healthy: false, Detail: "Codex token rate is not fresh"}
+		return
+	}
+	provider.health = providers.Health{Healthy: true, Detail: "Codex quota, token rate, and relay balance are available"}
+}
+
+func (provider *Provider) refreshTokenRate() ([]providers.Update, error) {
+	if !provider.config.TokenRate.Enabled {
+		return nil, nil
+	}
+	now := provider.now()
+	next, err := provider.readTokenRate(provider.config.TokenRate.StateFile, now, provider.config.TokenRate.StaleAfter)
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	previous := provider.tokenRateState
+	if err == nil {
+		provider.tokenRateState = next
+		if next.Freshness == protocol.FreshnessFresh {
+			provider.tokenRateHasSuccess = true
+			provider.tokenRateLastSuccess = now
+		}
+	} else if provider.tokenRateHasSuccess && now.Sub(provider.tokenRateLastSuccess) <= provider.config.TokenRate.StaleAfter {
+		provider.tokenRateState.Freshness = protocol.FreshnessCached
+	} else if provider.tokenRateHasSuccess || now.Sub(provider.tokenRateStartedAt) >= provider.config.TokenRate.StaleAfter {
+		provider.tokenRateState.TokensPerSecond = nil
+		provider.tokenRateState.ActiveSessions = 0
+		provider.tokenRateState.ActiveStreams = 0
+		provider.tokenRateState.Freshness = protocol.FreshnessStale
+	} else {
+		provider.tokenRateState.Freshness = protocol.FreshnessUnknown
+	}
+	provider.updateHealthLocked(err)
+	if tokenRateDisplayEqual(previous, provider.tokenRateState) {
+		return nil, err
+	}
+	state := provider.stateLocked()
+	return []providers.Update{{Patch: protocol.StatePatch{Codex: &state}}}, err
+}
+
+func tokenRateDisplayEqual(left, right protocol.TokenRateState) bool {
+	if left.ActiveSessions != right.ActiveSessions || left.ActiveStreams != right.ActiveStreams ||
+		left.WindowMS != right.WindowMS || left.Estimated != right.Estimated || left.Freshness != right.Freshness {
+		return false
+	}
+	if left.TokensPerSecond == nil || right.TokensPerSecond == nil {
+		return left.TokensPerSecond == nil && right.TokensPerSecond == nil
+	}
+	return *left.TokensPerSecond == *right.TokensPerSecond
 }
 
 func runAdapter(ctx context.Context, adapter config.CodexAdapterConfig, home config.CodexHomeConfig) (AdapterOutput, error) {
