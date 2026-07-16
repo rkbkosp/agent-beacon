@@ -45,6 +45,15 @@ const beacon_app_state_t *beacon_ui_default_app_state(void)
     return &state;
 }
 
+bool beacon_ui_token_rate_drops_to_zero(const beacon_token_rate_state_t *previous,
+                                        const beacon_token_rate_state_t *current)
+{
+    return previous != NULL && current != NULL && previous->available && current->available &&
+           (current->freshness == BEACON_FRESHNESS_FRESH ||
+            current->freshness == BEACON_FRESHNESS_CACHED) &&
+           previous->tokens_per_second > 0.0f && current->tokens_per_second <= 0.0f;
+}
+
 void beacon_ui_format_weather_recommendation(const beacon_weather_state_t *weather,
                                              char *output, size_t output_size)
 {

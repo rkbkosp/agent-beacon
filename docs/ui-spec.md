@@ -37,7 +37,9 @@ left 160 px and displays the daemon's global estimated visible-output rate in
 `tok/s`; the right 142 px contains two compact weekly-quota fuel bars, reset-card
 metadata, and the 0-0 balance. The numeric rate remains exact when the 0..240
 needle is pinned at its upper limit. Missing or stale rate data renders `--`
-instead of a misleading zero.
+instead of a misleading zero. When a valid nonzero rate returns to zero while
+the Codex page is visible, the needle eases back to zero over 1.5 seconds; the
+numeric rate updates immediately, and unavailable data never replays an old rate.
 
 ## Notification Themes
 

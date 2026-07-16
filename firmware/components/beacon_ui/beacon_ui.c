@@ -46,6 +46,20 @@ static const uint32_t COLOR_GREEN = 0x30a46c;
 
 #define TOKEN_RATE_GAUGE_MAX 240
 
+#define TOKEN_RATE_NEEDLE_RETURN_MS 1500U
+
+typedef struct {
+    lv_obj_t *meter;
+    lv_meter_indicator_t *needle;
+    int32_t displayed_value;
+    int32_t return_start_value;
+    uint32_t return_started_at;
+    bool return_pending;
+    bool return_active;
+} token_rate_gauge_runtime_t;
+
+static token_rate_gauge_runtime_t token_rate_gauge;
+
 static void tick_callback(void *argument)
 {
     (void)argument;
@@ -106,6 +120,8 @@ static void set_text(lv_obj_t *label, const char *text)
 static void begin_screen(uint32_t background)
 {
     lv_obj_clean(screen);
+    token_rate_gauge.meter = NULL;
+    token_rate_gauge.needle = NULL;
     lv_obj_set_style_bg_color(screen, lv_color_hex(background), 0);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
 }
@@ -177,10 +193,67 @@ static uint32_t token_rate_color(const beacon_token_rate_state_t *rate)
     return COLOR_BLUE;
 }
 
-static void create_token_rate_meter(const beacon_token_rate_state_t *rate)
+static bool token_rate_value_is_usable(const beacon_token_rate_state_t *rate)
+{
+    return rate->available && (rate->freshness == BEACON_FRESHNESS_FRESH ||
+                               rate->freshness == BEACON_FRESHNESS_CACHED);
+}
+
+static void set_token_rate_needle_value(void *meter, int32_t value)
+{
+    if (meter != token_rate_gauge.meter || token_rate_gauge.needle == NULL) {
+        return;
+    }
+    token_rate_gauge.displayed_value = value;
+    lv_meter_set_indicator_value(meter, token_rate_gauge.needle, value);
+}
+
+static void finish_token_rate_needle_return(lv_anim_t *animation)
+{
+    if (animation->var == token_rate_gauge.meter) {
+        token_rate_gauge.displayed_value = 0;
+        token_rate_gauge.return_active = false;
+    }
+}
+
+static void cancel_token_rate_needle_return(void)
+{
+    token_rate_gauge.return_pending = false;
+    token_rate_gauge.return_active = false;
+}
+
+static void create_token_rate_meter(const beacon_token_rate_state_t *rate,
+                                    bool animate_zero_return)
 {
     const uint32_t color = token_rate_color(rate);
     const int32_t gauge_value = token_rate_gauge_value(rate);
+    int32_t needle_value = gauge_value;
+    uint32_t needle_animation_ms = 0U;
+
+    if (animate_zero_return && token_rate_value_is_usable(rate) && gauge_value == 0) {
+        if (token_rate_gauge.return_pending) {
+            needle_value = token_rate_gauge.return_start_value;
+            token_rate_gauge.return_started_at = lv_tick_get();
+            token_rate_gauge.return_pending = false;
+            token_rate_gauge.return_active = needle_value > 0;
+            if (token_rate_gauge.return_active) {
+                needle_animation_ms = TOKEN_RATE_NEEDLE_RETURN_MS;
+            }
+        } else if (token_rate_gauge.return_active) {
+            // A live state refresh rebuilds the meter; keep the original deadline.
+            const uint32_t elapsed_ms = lv_tick_elaps(token_rate_gauge.return_started_at);
+            if (elapsed_ms < TOKEN_RATE_NEEDLE_RETURN_MS &&
+                token_rate_gauge.displayed_value > 0) {
+                needle_value = token_rate_gauge.displayed_value;
+                needle_animation_ms = TOKEN_RATE_NEEDLE_RETURN_MS - elapsed_ms;
+            } else {
+                token_rate_gauge.return_active = false;
+            }
+        }
+    } else {
+        cancel_token_rate_needle_return();
+    }
+
     lv_obj_t *meter = lv_meter_create(screen);
     lv_obj_set_pos(meter, 9, 24);
     lv_obj_set_size(meter, 150, 146);
@@ -203,7 +276,22 @@ static void create_token_rate_meter(const beacon_token_rate_state_t *rate)
     lv_meter_set_indicator_end_value(meter, progress, gauge_value);
     lv_meter_indicator_t *needle = lv_meter_add_needle_line(
         meter, scale, 3, lv_color_hex(color), -12);
-    lv_meter_set_indicator_value(meter, needle, gauge_value);
+    token_rate_gauge.meter = meter;
+    token_rate_gauge.needle = needle;
+    token_rate_gauge.displayed_value = needle_value;
+    lv_meter_set_indicator_value(meter, needle, needle_value);
+
+    if (needle_animation_ms > 0U) {
+        lv_anim_t animation;
+        lv_anim_init(&animation);
+        lv_anim_set_var(&animation, meter);
+        lv_anim_set_exec_cb(&animation, set_token_rate_needle_value);
+        lv_anim_set_values(&animation, needle_value, 0);
+        lv_anim_set_time(&animation, needle_animation_ms);
+        lv_anim_set_path_cb(&animation, lv_anim_path_ease_out);
+        lv_anim_set_ready_cb(&animation, finish_token_rate_needle_return);
+        lv_anim_start(&animation);
+    }
 
     char value[24];
     if (!rate->available) {
@@ -279,11 +367,11 @@ static void create_codex_fuel(const beacon_codex_home_t *home, lv_coord_t y)
                           COLOR_MUTED), cards);
 }
 
-static void show_codex_page(void)
+static void show_codex_page(bool animate_zero_return)
 {
     begin_screen(COLOR_BACKGROUND);
     create_header("TOKEN 速度", connection_suffix());
-    create_token_rate_meter(&app_state.codex.token_rate);
+    create_token_rate_meter(&app_state.codex.token_rate, animate_zero_return);
     create_box(169, 29, 1, 135, COLOR_SUBTLE);
     set_text(create_label(178, 27, 134, 18, FONT_BODY_14, LV_TEXT_ALIGN_LEFT,
                           COLOR_MUTED), "油量 · 周配额");
@@ -480,6 +568,20 @@ void beacon_ui_process(void)
 void beacon_ui_set_app_state(const beacon_app_state_t *state)
 {
     if (state != NULL) {
+        if (beacon_ui_token_rate_drops_to_zero(&app_state.codex.token_rate,
+                                               &state->codex.token_rate)) {
+            if (token_rate_gauge.meter != NULL) {
+                token_rate_gauge.return_start_value = token_rate_gauge.displayed_value;
+            } else {
+                token_rate_gauge.return_start_value =
+                    token_rate_gauge_value(&app_state.codex.token_rate);
+            }
+            token_rate_gauge.return_pending = true;
+            token_rate_gauge.return_active = false;
+        } else if (!token_rate_value_is_usable(&state->codex.token_rate) ||
+                   state->codex.token_rate.tokens_per_second > 0.0f) {
+            cancel_token_rate_needle_return();
+        }
         app_state = *state;
     }
 }
@@ -496,11 +598,11 @@ void beacon_ui_set_connection_snapshot_ready(bool ready)
     connection_snapshot_ready = ready;
 }
 
-static bool render_page(beacon_page_t page)
+static bool render_page(beacon_page_t page, bool animate_zero_return)
 {
     switch (page) {
     case BEACON_PAGE_CODEX:
-        show_codex_page();
+        show_codex_page(animate_zero_return);
         break;
     case BEACON_PAGE_AGENTS:
         show_agents_page();
@@ -520,7 +622,7 @@ void beacon_ui_show_page(beacon_page_t page)
         return;
     }
     lv_anim_del(screen, NULL);
-    if (!render_page(page)) {
+    if (!render_page(page, false)) {
         return;
     }
     lv_obj_set_style_opa(screen, LV_OPA_0, 0);
@@ -533,7 +635,7 @@ void beacon_ui_refresh_page(beacon_page_t page)
         return;
     }
     lv_anim_del(screen, NULL);
-    if (!render_page(page)) {
+    if (!render_page(page, page == BEACON_PAGE_CODEX)) {
         return;
     }
     lv_obj_set_style_opa(screen, LV_OPA_COVER, 0);
@@ -544,6 +646,7 @@ void beacon_ui_show_diagnostics(void)
     if (screen == NULL) {
         return;
     }
+    cancel_token_rate_needle_return();
     begin_screen(COLOR_BACKGROUND);
     create_header("诊断", connection_suffix());
     char line[64];
@@ -583,6 +686,7 @@ void beacon_ui_show_notification(beacon_theme_t theme, const char *title, const 
         return;
     }
     const beacon_theme_palette_t *palette = beacon_ui_theme_palette(theme);
+    cancel_token_rate_needle_return();
     begin_screen(palette->background_rgb);
     set_text(create_label(12, 10, 296, 18, FONT_HEADING_14, LV_TEXT_ALIGN_CENTER,
                           palette->foreground_rgb), source_label != NULL ? source_label : "AGENT BEACON");

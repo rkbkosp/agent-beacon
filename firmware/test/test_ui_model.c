@@ -29,6 +29,25 @@ int main(void)
            state->codex.token_rate.tokens_per_second < 42.8f);
     assert(state->codex.token_rate.active_sessions == 2);
     assert(state->codex.token_rate.active_streams == 3);
+    beacon_token_rate_state_t previous_rate = state->codex.token_rate;
+    beacon_token_rate_state_t current_rate = previous_rate;
+    current_rate.tokens_per_second = 0.0f;
+    assert(beacon_ui_token_rate_drops_to_zero(&previous_rate, &current_rate));
+    assert(!beacon_ui_token_rate_drops_to_zero(&current_rate, &current_rate));
+    current_rate.freshness = BEACON_FRESHNESS_STALE;
+    assert(!beacon_ui_token_rate_drops_to_zero(&previous_rate, &current_rate));
+    current_rate.freshness = BEACON_FRESHNESS_FRESH;
+    current_rate.available = false;
+    assert(!beacon_ui_token_rate_drops_to_zero(&previous_rate, &current_rate));
+    current_rate = previous_rate;
+    current_rate.tokens_per_second = 18.0f;
+    assert(!beacon_ui_token_rate_drops_to_zero(&previous_rate, &current_rate));
+    previous_rate.available = false;
+    current_rate.tokens_per_second = 0.0f;
+    assert(!beacon_ui_token_rate_drops_to_zero(&previous_rate, &current_rate));
+    assert(!beacon_ui_token_rate_drops_to_zero(NULL, &current_rate));
+    assert(!beacon_ui_token_rate_drops_to_zero(&previous_rate, NULL));
+
     assert(state->agents.item_count == 4);
     assert(state->weather.current.temp_c == 31);
     assert(state->weather.next_outing.umbrella_required == true);

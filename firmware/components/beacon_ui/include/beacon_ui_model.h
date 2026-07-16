@@ -18,5 +18,7 @@ typedef struct {
 const beacon_page_content_t *beacon_ui_page_content(beacon_page_t page);
 const beacon_theme_palette_t *beacon_ui_theme_palette(beacon_theme_t theme);
 const beacon_app_state_t *beacon_ui_default_app_state(void);
+bool beacon_ui_token_rate_drops_to_zero(const beacon_token_rate_state_t *previous,
+                                        const beacon_token_rate_state_t *current);
 void beacon_ui_format_weather_recommendation(const beacon_weather_state_t *weather,
                                              char *output, size_t output_size);
