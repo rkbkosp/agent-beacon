@@ -18,6 +18,9 @@ func TestProviderSnapshotContainsOnlyCurrentThreePageDomains(t *testing.T) {
 	if snapshot.Agents.Provider != "herdr" || snapshot.Weather.Provider != "qweather" {
 		t.Fatalf("providers = agents:%q weather:%q", snapshot.Agents.Provider, snapshot.Weather.Provider)
 	}
+	if !snapshot.Agents.CodexActive {
+		t.Fatal("default working Codex fixture must be active")
+	}
 }
 
 func TestAllDocumentedFixturesAreAvailable(t *testing.T) {
@@ -40,6 +43,9 @@ func TestAllDocumentedFixturesAreAvailable(t *testing.T) {
 		}
 		if name == "herdr-blocked" && (fixture.Notification == nil || fixture.Notification.Kind != "agent.blocked") {
 			t.Fatalf("blocked fixture = %+v", fixture)
+		}
+		if (name == "herdr-blocked" || name == "herdr-done") && fixture.Patch.Agents.CodexActive {
+			t.Fatalf("%s fixture must not mark Codex active", name)
 		}
 		if name == "herdr-done" && (fixture.Notification == nil || fixture.Notification.Kind != "agent.done") {
 			t.Fatalf("done fixture = %+v", fixture)

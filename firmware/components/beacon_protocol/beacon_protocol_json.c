@@ -1,5 +1,6 @@
 #include "beacon_protocol.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -287,9 +288,11 @@ static bool parse_codex(const cJSON *object, beacon_codex_state_t *codex)
 {
     const cJSON *homes = cJSON_GetObjectItemCaseSensitive(object, "homes");
     const cJSON *relay = cJSON_GetObjectItemCaseSensitive(object, "relay");
+    const cJSON *token_rate = cJSON_GetObjectItemCaseSensitive(object, "token_rate");
     const int home_count = cJSON_GetArraySize(homes);
     if (!cJSON_IsObject(object) || !cJSON_IsArray(homes) || home_count < 1 ||
-        home_count > BEACON_CODEX_HOME_MAX || !cJSON_IsObject(relay)) {
+        home_count > BEACON_CODEX_HOME_MAX || !cJSON_IsObject(relay) ||
+        !cJSON_IsObject(token_rate)) {
         return false;
     }
     codex->home_count = (size_t)home_count;
@@ -316,6 +319,36 @@ static bool parse_codex(const cJSON *object, beacon_codex_state_t *codex)
     } else {
         snprintf(codex->relay.display, sizeof(codex->relay.display), "$%.2f", remaining->valuedouble);
     }
+
+    const cJSON *rate = cJSON_GetObjectItemCaseSensitive(token_rate, "tokens_per_second");
+    const cJSON *estimated = cJSON_GetObjectItemCaseSensitive(token_rate, "estimated");
+    const cJSON *updated_at = cJSON_GetObjectItemCaseSensitive(token_rate, "updated_at");
+    int active_sessions;
+    int active_streams;
+    int window_ms;
+    if ((!cJSON_IsNull(rate) &&
+         (!cJSON_IsNumber(rate) || !isfinite(rate->valuedouble) ||
+          rate->valuedouble < 0.0 || rate->valuedouble > 10000.0)) ||
+        !integer_in_range(cJSON_GetObjectItemCaseSensitive(token_rate, "active_sessions"),
+                          0, UINT16_MAX, &active_sessions) ||
+        !integer_in_range(cJSON_GetObjectItemCaseSensitive(token_rate, "active_streams"),
+                          0, UINT16_MAX, &active_streams) ||
+        active_sessions > active_streams ||
+        !integer_in_range(cJSON_GetObjectItemCaseSensitive(token_rate, "window_ms"),
+                          0, 600000, &window_ms) ||
+        !cJSON_IsTrue(estimated) ||
+        (!cJSON_IsNull(updated_at) && !cJSON_IsString(updated_at)) ||
+        !parse_freshness_item(cJSON_GetObjectItemCaseSensitive(token_rate, "freshness"),
+                              &codex->token_rate.freshness)) {
+        return false;
+    }
+    codex->token_rate.available = cJSON_IsNumber(rate);
+    codex->token_rate.tokens_per_second = codex->token_rate.available
+                                               ? (float)rate->valuedouble
+                                               : 0.0f;
+    codex->token_rate.active_sessions = (uint16_t)active_sessions;
+    codex->token_rate.active_streams = (uint16_t)active_streams;
+    codex->token_rate.window_ms = (uint32_t)window_ms;
     return true;
 }
 
@@ -391,14 +424,20 @@ static bool parse_agents(const cJSON *object, beacon_agents_state_t *agents)
 {
     char provider[16];
     const cJSON *connected = cJSON_GetObjectItemCaseSensitive(object, "connected");
+    const cJSON *codex_active = cJSON_GetObjectItemCaseSensitive(object, "codex_active");
     const cJSON *items = cJSON_GetObjectItemCaseSensitive(object, "items");
     if (!cJSON_IsObject(object) ||
         !copy_json_string(object, "provider", provider, sizeof(provider), true) ||
-        strcmp(provider, "herdr") != 0 || !cJSON_IsBool(connected) || !cJSON_IsArray(items) ||
+        strcmp(provider, "herdr") != 0 || !cJSON_IsBool(connected) ||
+        !cJSON_IsBool(codex_active) || !cJSON_IsArray(items) ||
         !cJSON_IsString(cJSON_GetObjectItemCaseSensitive(object, "updated_at"))) {
         return false;
     }
     agents->connected = cJSON_IsTrue(connected);
+    agents->codex_active = cJSON_IsTrue(codex_active);
+    if (!agents->connected && agents->codex_active) {
+        return false;
+    }
     const int count = cJSON_GetArraySize(items);
     agents->item_count = 0;
     agents->hidden_count = 0;

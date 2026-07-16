@@ -15,7 +15,10 @@ X-Agent-Beacon-Protocol: 2
 `state_patch`、`notification` 和 heartbeat；revision gap 由设备发送
 `get_snapshot` 恢复。
 
-Snapshot 只包含 `clock`、`codex`、`agents`、`weather`、`system`。通知只允许
+Snapshot 只包含 `clock`、`codex`、`agents`、`weather`、`system`；实时全局 Token
+速度位于 `codex.token_rate`，不新增顶层 domain。`agents.codex_active` 由 Herdr
+会话状态派生：仅当至少一个 Codex session 为 `working` 时为 `true`，断连时为
+`false`。通知只允许
 `agent`、`quota`、`weather`、`system` 四类。ACK 是平铺 v2 对象，状态集合为：
 
 ```text

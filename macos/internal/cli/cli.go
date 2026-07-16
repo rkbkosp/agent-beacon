@@ -218,8 +218,9 @@ func runtimeSnapshot(settings config.Config) protocol.Snapshot {
 	return protocol.Snapshot{
 		Clock: protocol.ClockState{Timezone: timezone, ServerTime: now},
 		Codex: protocol.CodexState{
-			Homes: homes,
-			Relay: protocol.RelayState{Unit: "USD", UpdatedAt: now, Freshness: protocol.FreshnessUnknown},
+			Homes:     homes,
+			Relay:     protocol.RelayState{Unit: "USD", UpdatedAt: now, Freshness: protocol.FreshnessUnknown},
+			TokenRate: protocol.TokenRateState{Estimated: true, Freshness: protocol.FreshnessUnknown},
 		},
 		Agents:  protocol.AgentsState{Provider: "herdr", Connected: false, UpdatedAt: now, Items: []protocol.AgentItem{}},
 		Weather: weather,

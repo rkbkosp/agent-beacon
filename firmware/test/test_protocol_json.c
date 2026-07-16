@@ -29,8 +29,12 @@ static const char *VALID_SNAPSHOT =
        "\"nearest_reset_card_expires_at\":\"2026-07-18T23:59:59+08:00\","
        "\"updated_at\":\"2026-07-14T14:30:00+08:00\",\"freshness\":\"fresh\"}],"
       "\"relay\":{\"remaining\":14.16,\"unit\":\"USD\",\"is_valid\":true,"
-       "\"updated_at\":\"2026-07-14T14:30:00+08:00\",\"freshness\":\"fresh\"}},"
+       "\"updated_at\":\"2026-07-14T14:30:00+08:00\",\"freshness\":\"fresh\"},"
+      "\"token_rate\":{\"tokens_per_second\":42.7,\"active_sessions\":2,"
+       "\"active_streams\":3,\"window_ms\":2000,\"estimated\":true,"
+       "\"updated_at\":\"2026-07-14T14:31:00+08:00\",\"freshness\":\"fresh\"}},"
     "\"agents\":{\"provider\":\"herdr\",\"connected\":true,"
+      "\"codex_active\":true,"
       "\"updated_at\":\"2026-07-14T14:31:00+08:00\",\"items\":["
       "{\"pane_id\":\"p1\",\"display_name\":\"A\",\"status\":\"working\",\"focused\":false,\"revision\":40},"
       "{\"pane_id\":\"p2\",\"display_name\":\"B\",\"status\":\"idle\",\"focused\":false,\"revision\":50},"
@@ -69,6 +73,12 @@ static void test_valid_snapshot_and_patch(void)
     assert(message.state.codex.homes[0].weekly_remaining_percent == 18);
     assert(strcmp(message.state.codex.homes[0].weekly_reset, "07/15 11:39") == 0);
     assert(strcmp(message.state.codex.relay.display, "$14.16") == 0);
+    assert(message.state.codex.token_rate.available);
+    assert(message.state.codex.token_rate.tokens_per_second > 42.6f &&
+           message.state.codex.token_rate.tokens_per_second < 42.8f);
+    assert(message.state.codex.token_rate.active_sessions == 2);
+    assert(message.state.codex.token_rate.active_streams == 3);
+    assert(message.state.agents.codex_active);
     assert(message.state.agents.item_count == 4 && message.state.agents.hidden_count == 1);
     assert(message.state.agents.items[0].status == BEACON_AGENT_BLOCKED);
     assert(message.state.agents.items[1].status == BEACON_AGENT_DONE);
@@ -99,7 +109,10 @@ static void test_valid_snapshot_and_patch(void)
         "\"reset_cards_available\":0,\"nearest_reset_card_expires_at\":null,"
         "\"updated_at\":\"2026-07-14T14:30:00+08:00\",\"freshness\":\"fresh\"}],"
         "\"relay\":{\"remaining\":null,\"unit\":\"USD\",\"is_valid\":false,"
-        "\"updated_at\":\"2026-07-14T14:30:00+08:00\",\"freshness\":\"fresh\"}}}}";
+        "\"updated_at\":\"2026-07-14T14:30:00+08:00\",\"freshness\":\"fresh\"},"
+        "\"token_rate\":{\"tokens_per_second\":null,\"active_sessions\":0,"
+        "\"active_streams\":0,\"window_ms\":0,\"estimated\":true,"
+        "\"updated_at\":null,\"freshness\":\"unknown\"}}}}";
     assert(beacon_protocol_decode(invalid_relay_patch, strlen(invalid_relay_patch), &message));
     assert(strcmp(message.state.codex.relay.display, "凭证无效") == 0);
 }
@@ -129,6 +142,7 @@ static void test_display_strings_truncate_at_utf8_boundaries(void)
         "{\"v\":2,\"id\":\"patch-long-agent\",\"type\":\"state_patch\","
         "\"ts\":\"2026-07-14T14:32:00+08:00\",\"revision\":304,\"payload\":{"
         "\"agents\":{\"provider\":\"herdr\",\"connected\":true,"
+        "\"codex_active\":true,"
         "\"updated_at\":\"2026-07-14T14:32:00+08:00\",\"items\":[{"
         "\"pane_id\":\"p1\",\"display_name\":\"%s\",\"status\":\"working\","
         "\"custom_status\":\"%s\",\"focused\":false,\"revision\":1}]}}}",
@@ -194,6 +208,23 @@ static void test_invalid_messages(void)
         "{\"v\":2,\"id\":\"snapshot\",\"type\":\"snapshot\",\"ts\":\"2026-07-14T12:00:00Z\",\"revision\":1,"
         "\"payload\":{\"clock\":{},\"codex\":{},\"agents\":{},\"weather\":{},\"system\":{},\"tasks\":{}}}";
     assert(!beacon_protocol_decode(legacy_top_level, strlen(legacy_top_level), &message));
+
+    const char *agents_without_codex_active =
+        "{\"v\":2,\"id\":\"patch\",\"type\":\"state_patch\","
+        "\"ts\":\"2026-07-14T12:00:00Z\",\"revision\":2,\"payload\":{"
+        "\"agents\":{\"provider\":\"herdr\",\"connected\":true,"
+        "\"updated_at\":\"2026-07-14T12:00:00Z\",\"items\":[]}}}";
+    assert(!beacon_protocol_decode(agents_without_codex_active,
+                                   strlen(agents_without_codex_active), &message));
+
+    const char *disconnected_active_codex =
+        "{\"v\":2,\"id\":\"patch\",\"type\":\"state_patch\","
+        "\"ts\":\"2026-07-14T12:00:00Z\",\"revision\":2,\"payload\":{"
+        "\"agents\":{\"provider\":\"herdr\",\"connected\":false,"
+        "\"codex_active\":true,\"updated_at\":\"2026-07-14T12:00:00Z\","
+        "\"items\":[]}}}";
+    assert(!beacon_protocol_decode(disconnected_active_codex,
+                                   strlen(disconnected_active_codex), &message));
 
     char invalid_utf8[] = {'{', '"', 'x', '"', ':', '"', (char)0xff, '"', '}', '\0'};
     assert(!beacon_protocol_decode(invalid_utf8, strlen(invalid_utf8), &message));

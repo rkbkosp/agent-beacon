@@ -72,6 +72,7 @@ func DefaultSnapshot(now time.Time) protocol.Snapshot {
 	expiresVS := now.Add(4 * 24 * time.Hour)
 	cardsMain, cardsVS := 2, 1
 	remaining := 14.16
+	tokenRate := 42.7
 	umbrella := true
 	return protocol.Snapshot{
 		Clock: protocol.ClockState{Timezone: "Asia/Shanghai", ServerTime: now},
@@ -83,6 +84,8 @@ func DefaultSnapshot(now time.Time) protocol.Snapshot {
 					ResetCardsAvailable: &cardsVS, NearestResetCardExpiresAt: &expiresVS, UpdatedAt: now, Freshness: protocol.FreshnessFresh},
 			},
 			Relay: protocol.RelayState{Remaining: &remaining, Unit: "USD", IsValid: true, UpdatedAt: now, Freshness: protocol.FreshnessFresh},
+			TokenRate: protocol.TokenRateState{TokensPerSecond: &tokenRate, ActiveSessions: 2, ActiveStreams: 3,
+				WindowMS: 2000, Estimated: true, UpdatedAt: &now, Freshness: protocol.FreshnessFresh},
 		},
 		Agents: agentsAllStatuses(now),
 		Weather: protocol.WeatherState{
@@ -124,12 +127,14 @@ func Build(name string, now time.Time) (Fixture, error) {
 	case "herdr-all-statuses":
 		return Fixture{Patch: protocol.StatePatch{Agents: &base.Agents}}, nil
 	case "herdr-blocked":
-		base.Agents.Items = []protocol.AgentItem{{PaneID: "w1:p1", DisplayName: "Chrome Plugin", Status: protocol.AgentBlocked, CustomStatus: "等待批准", Revision: 43}}
+		base.Agents.CodexActive = false
+		base.Agents.Items = []protocol.AgentItem{{PaneID: "w1:p1", Agent: "codex", DisplayName: "Chrome Plugin", Status: protocol.AgentBlocked, CustomStatus: "等待批准", Revision: 43}}
 		return Fixture{Patch: protocol.StatePatch{Agents: &base.Agents}, Notification: notification(now,
 			protocol.CategoryAgent, "agent.blocked", "herdr", "w1:p1", protocol.ThemeYellow,
 			protocol.UrgencyAttention, 75, "agent:w1:p1:mock:blocked:43", "Agent 需要关注", "Chrome Plugin · 等待批准", 7000, 30*time.Minute)}, nil
 	case "herdr-done":
-		base.Agents.Items = []protocol.AgentItem{{PaneID: "w1:p1", DisplayName: "Chrome Plugin", Status: protocol.AgentDone, Revision: 44}}
+		base.Agents.CodexActive = false
+		base.Agents.Items = []protocol.AgentItem{{PaneID: "w1:p1", Agent: "codex", DisplayName: "Chrome Plugin", Status: protocol.AgentDone, Revision: 44}}
 		return Fixture{Patch: protocol.StatePatch{Agents: &base.Agents}, Notification: notification(now,
 			protocol.CategoryAgent, "agent.done", "herdr", "w1:p1", protocol.ThemeGreen,
 			protocol.UrgencyNormal, 50, "agent:w1:p1:mock:done:44", "Agent 已完成", "Chrome Plugin · 已就绪", 4000, time.Minute)}, nil
@@ -172,9 +177,10 @@ func Build(name string, now time.Time) (Fixture, error) {
 }
 
 func agentsAllStatuses(now time.Time) protocol.AgentsState {
-	return protocol.AgentsState{Provider: "herdr", Connected: true, UpdatedAt: now, Items: []protocol.AgentItem{
-		{PaneID: "w1:p1", DisplayName: "Chrome Plugin", Status: protocol.AgentBlocked, CustomStatus: "等待批准", Revision: 42},
-		{PaneID: "w1:p2", DisplayName: "CaseForge", Status: protocol.AgentWorking, Focused: true, Revision: 18},
+	return protocol.AgentsState{Provider: "herdr", Connected: true, CodexActive: true, UpdatedAt: now, Items: []protocol.AgentItem{
+		{PaneID: "w1:p1", Agent: "codex", DisplayName: "Chrome Plugin", Status: protocol.AgentBlocked, CustomStatus: "等待批准", Revision: 42},
+		{PaneID: "w1:p2", Agent: "codex", DisplayName: "CaseForge", Status: protocol.AgentWorking, Focused: true, Revision: 18,
+			AgentSession: &protocol.AgentSession{Source: "herdr:codex", Kind: "id", Value: "session-working"}},
 		{PaneID: "w1:p3", DisplayName: "Docs", Status: protocol.AgentDone, Revision: 9},
 		{PaneID: "w1:p4", DisplayName: "Review", Status: protocol.AgentIdle, Revision: 3},
 		{PaneID: "w1:p5", DisplayName: "未知窗格", Status: protocol.AgentUnknown, Revision: 1},

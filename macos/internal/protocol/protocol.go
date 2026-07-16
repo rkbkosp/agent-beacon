@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -171,9 +172,20 @@ type RelayState struct {
 	Freshness Freshness `json:"freshness"`
 }
 
+type TokenRateState struct {
+	TokensPerSecond *float64   `json:"tokens_per_second"`
+	ActiveSessions  int        `json:"active_sessions"`
+	ActiveStreams   int        `json:"active_streams"`
+	WindowMS        uint32     `json:"window_ms"`
+	Estimated       bool       `json:"estimated"`
+	UpdatedAt       *time.Time `json:"updated_at"`
+	Freshness       Freshness  `json:"freshness"`
+}
+
 type CodexState struct {
-	Homes []CodexHome `json:"homes"`
-	Relay RelayState  `json:"relay"`
+	Homes     []CodexHome    `json:"homes"`
+	Relay     RelayState     `json:"relay"`
+	TokenRate TokenRateState `json:"token_rate"`
 }
 
 type AgentItem struct {
@@ -198,10 +210,11 @@ type AgentSession struct {
 }
 
 type AgentsState struct {
-	Provider  string      `json:"provider"`
-	Connected bool        `json:"connected"`
-	UpdatedAt time.Time   `json:"updated_at"`
-	Items     []AgentItem `json:"items"`
+	Provider    string      `json:"provider"`
+	Connected   bool        `json:"connected"`
+	CodexActive bool        `json:"codex_active"`
+	UpdatedAt   time.Time   `json:"updated_at"`
+	Items       []AgentItem `json:"items"`
 }
 
 type WeatherCurrent struct {
@@ -380,6 +393,9 @@ func (envelope Envelope) Validate() error {
 		if value.Clock == nil && value.Codex == nil && value.Agents == nil && value.Weather == nil && value.System == nil {
 			return errors.New("empty state patch")
 		}
+		if value.Agents != nil && value.Agents.CodexActive && !value.Agents.Connected {
+			return errors.New("disconnected Herdr state cannot have an active Codex session")
+		}
 	case TypeHeartbeat, TypeError, TypeDeviceStatus, TypeButtonAction:
 		// Direction-specific validation is performed by the endpoint.
 	default:
@@ -446,8 +462,28 @@ func (snapshot Snapshot) Validate() error {
 			return errors.New("invalid Codex home")
 		}
 	}
+	if rate := snapshot.Codex.TokenRate.TokensPerSecond; rate != nil && (*rate < 0 || *rate > 10000 || math.IsNaN(*rate) || math.IsInf(*rate, 0)) {
+		return errors.New("invalid Codex token rate")
+	}
+	if snapshot.Codex.TokenRate.ActiveSessions < 0 || snapshot.Codex.TokenRate.ActiveStreams < 0 {
+		return errors.New("invalid Codex token-rate activity")
+	}
+	if !snapshot.Codex.TokenRate.Estimated || snapshot.Codex.TokenRate.ActiveSessions > snapshot.Codex.TokenRate.ActiveStreams ||
+		snapshot.Codex.TokenRate.WindowMS > 600000 ||
+		(snapshot.Codex.TokenRate.TokensPerSecond == nil &&
+			(snapshot.Codex.TokenRate.ActiveSessions != 0 || snapshot.Codex.TokenRate.ActiveStreams != 0)) {
+		return errors.New("invalid Codex token-rate contract")
+	}
+	switch snapshot.Codex.TokenRate.Freshness {
+	case FreshnessFresh, FreshnessCached, FreshnessStale, FreshnessUnknown:
+	default:
+		return errors.New("invalid Codex token-rate freshness")
+	}
 	if snapshot.Agents.Provider != "herdr" {
 		return errors.New("agents provider must be herdr")
+	}
+	if snapshot.Agents.CodexActive && !snapshot.Agents.Connected {
+		return errors.New("disconnected Herdr state cannot have an active Codex session")
 	}
 	for _, item := range snapshot.Agents.Items {
 		switch item.Status {

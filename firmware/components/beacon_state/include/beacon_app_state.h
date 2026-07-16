@@ -49,9 +49,19 @@ typedef struct {
 } beacon_relay_state_t;
 
 typedef struct {
+    float tokens_per_second;
+    bool available;
+    uint16_t active_sessions;
+    uint16_t active_streams;
+    uint32_t window_ms;
+    beacon_freshness_t freshness;
+} beacon_token_rate_state_t;
+
+typedef struct {
     size_t home_count;
     beacon_codex_home_t homes[BEACON_CODEX_HOME_MAX];
     beacon_relay_state_t relay;
+    beacon_token_rate_state_t token_rate;
 } beacon_codex_state_t;
 
 typedef struct {
@@ -65,6 +75,7 @@ typedef struct {
 
 typedef struct {
     bool connected;
+    bool codex_active;
     size_t item_count;
     size_t hidden_count;
     beacon_agent_item_t items[BEACON_AGENT_ITEM_MAX];

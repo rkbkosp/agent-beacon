@@ -37,10 +37,11 @@
     },
     "codex": {
       "type": "object", "additionalProperties": false,
-      "required": ["homes", "relay"],
+      "required": ["homes", "relay", "token_rate"],
       "properties": {
         "homes": { "type": "array", "minItems": 1, "maxItems": 2, "items": { "$ref": "#/$defs/codexHome" } },
-        "relay": { "$ref": "#/$defs/relay" }
+        "relay": { "$ref": "#/$defs/relay" },
+        "token_rate": { "$ref": "#/$defs/tokenRate" }
       }
     },
     "codexHome": {
@@ -71,12 +72,35 @@
         "freshness": { "$ref": "#/$defs/freshness" }
       }
     },
+    "tokenRate": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "tokens_per_second", "active_sessions", "active_streams", "window_ms",
+        "estimated", "updated_at", "freshness"
+      ],
+      "properties": {
+        "tokens_per_second": { "type": ["number", "null"], "minimum": 0, "maximum": 10000 },
+        "active_sessions": { "type": "integer", "minimum": 0 },
+        "active_streams": { "type": "integer", "minimum": 0 },
+        "window_ms": { "type": "integer", "minimum": 0, "maximum": 600000 },
+        "estimated": { "const": true },
+        "updated_at": { "$ref": "#/$defs/dateOrNull" },
+        "freshness": { "$ref": "#/$defs/freshness" }
+      }
+    },
     "agents": {
       "type": "object", "additionalProperties": false,
-      "required": ["provider", "connected", "updated_at", "items"],
+      "required": ["provider", "connected", "codex_active", "updated_at", "items"],
+      "allOf": [
+        {
+          "if": { "properties": { "connected": { "const": false } } },
+          "then": { "properties": { "codex_active": { "const": false } } }
+        }
+      ],
       "properties": {
         "provider": { "const": "herdr" },
         "connected": { "type": "boolean" },
+        "codex_active": { "type": "boolean" },
         "updated_at": { "type": "string", "format": "date-time" },
         "items": { "type": "array", "items": { "$ref": "#/$defs/agent" } }
       }

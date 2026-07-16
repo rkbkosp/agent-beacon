@@ -75,7 +75,8 @@ func TestSnapshotV2RejectsOldTopLevelFields(t *testing.T) {
 	payload := Snapshot{
 		Clock: ClockState{Timezone: "Asia/Shanghai", ServerTime: now},
 		Codex: CodexState{Homes: []CodexHome{{ID: "main", Label: "MAIN", WeeklyRemainingPercent: 18,
-			ResetCardsAvailable: intPointer(2), Freshness: FreshnessFresh}}},
+			ResetCardsAvailable: intPointer(2), Freshness: FreshnessFresh}},
+			TokenRate: TokenRateState{Estimated: true, Freshness: FreshnessUnknown}},
 		Agents:  AgentsState{Provider: "herdr", Connected: true, UpdatedAt: now},
 		Weather: WeatherState{Location: "Hangzhou", Provider: "qweather", UpdatedAt: now},
 		System:  SystemState{BridgeOnline: true, OverallFreshness: FreshnessFresh},
@@ -87,6 +88,19 @@ func TestSnapshotV2RejectsOldTopLevelFields(t *testing.T) {
 	legacy := []byte(`{"v":2,"id":"snapshot-2","type":"snapshot","ts":"2026-07-14T12:00:00+08:00","revision":1,"payload":{"clock":{"timezone":"Asia/Shanghai","server_time":"2026-07-14T12:00:00+08:00"},"codex":{"homes":[],"relay":{}},"agents":{"provider":"herdr","connected":true,"updated_at":"2026-07-14T12:00:00+08:00","items":[]},"weather":{"location":"Hangzhou","provider":"qweather","updated_at":"2026-07-14T12:00:00+08:00"},"system":{"bridge_online":true,"overall_freshness":"fresh"},"tasks":{}}}`)
 	if _, err := Decode(legacy); err == nil {
 		t.Fatal("snapshot with tasks must be rejected")
+	}
+}
+
+func TestStatePatchRejectsActiveCodexWhenHerdrIsDisconnected(t *testing.T) {
+	now := time.Now()
+	_, err := NewEnvelope("patch-1", TypeStatePatch, 2, now, StatePatch{
+		Agents: &AgentsState{
+			Provider: "herdr", Connected: false, CodexActive: true,
+			UpdatedAt: now, Items: []AgentItem{},
+		},
+	})
+	if err == nil {
+		t.Fatal("disconnected Herdr patch marked Codex active")
 	}
 }
 

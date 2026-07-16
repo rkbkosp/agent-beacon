@@ -11,19 +11,25 @@ void beacon_app_state_init_mock(beacon_app_state_t *state)
     state->codex.home_count = 2;
     state->codex.homes[0] = (beacon_codex_home_t) {
         .id = "main", .label = "MAIN", .weekly_remaining_percent = 18,
-        .weekly_reset = "周三 11:39", .reset_cards_available = 2,
+        .weekly_reset = "07/15 11:39", .reset_cards_available = 2,
         .nearest_card_expiry = "07/20", .freshness = BEACON_FRESHNESS_FRESH,
     };
     state->codex.homes[1] = (beacon_codex_home_t) {
         .id = "vs", .label = "VS", .weekly_remaining_percent = 64,
-        .weekly_reset = "周六 09:00", .reset_cards_available = 1,
+        .weekly_reset = "07/18 09:00", .reset_cards_available = 1,
         .nearest_card_expiry = "07/18", .freshness = BEACON_FRESHNESS_FRESH,
     };
     state->codex.relay = (beacon_relay_state_t) {
         .display = "$14.16", .is_valid = true, .freshness = BEACON_FRESHNESS_FRESH,
     };
+    state->codex.token_rate = (beacon_token_rate_state_t) {
+        .tokens_per_second = 42.7f, .available = true,
+        .active_sessions = 2, .active_streams = 3, .window_ms = 2000,
+        .freshness = BEACON_FRESHNESS_FRESH,
+    };
 
     state->agents.connected = true;
+    state->agents.codex_active = true;
     state->agents.item_count = 4;
     state->agents.items[0] = (beacon_agent_item_t) {
         .pane_id = "w1:p1", .display_name = "Chrome Plugin",
