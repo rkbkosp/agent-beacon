@@ -12,9 +12,11 @@ cc \
   -Wextra \
   -Werror \
   -I"$ROOT_DIR/firmware/components/beacon_state/include" \
+  -I"$ROOT_DIR/firmware/components/beacon_transport/include" \
   -I"$ROOT_DIR/firmware/components/beacon_ui/include" \
   "$ROOT_DIR/firmware/test/test_ui_model.c" \
   "$ROOT_DIR/firmware/components/beacon_state/beacon_app_state.c" \
+  "$ROOT_DIR/firmware/components/beacon_state/beacon_ui_state.c" \
   "$ROOT_DIR/firmware/components/beacon_ui/beacon_ui_model.c" \
   -o "$BUILD_DIR/test_ui_model"
 

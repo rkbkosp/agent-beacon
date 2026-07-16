@@ -19,6 +19,7 @@
 
 #define WIFI_CONNECTED_BIT BIT0
 #define WEBSOCKET_CONNECTED_BIT BIT1
+#define NETWORK_SUSPENDED_BIT BIT2
 #define NETWORK_RX_QUEUE_LENGTH 16
 #define NETWORK_TX_QUEUE_LENGTH 16
 #define NETWORK_TASK_STACK_SIZE 6144
@@ -171,9 +172,11 @@ static bool start_websocket(void)
         destroy_websocket();
         return false;
     }
-    const EventBits_t bits = xEventGroupWaitBits(connection_events, WEBSOCKET_CONNECTED_BIT,
-                                                 pdFALSE, pdTRUE, pdMS_TO_TICKS(10000));
-    return (bits & WEBSOCKET_CONNECTED_BIT) != 0;
+    const EventBits_t bits = xEventGroupWaitBits(
+        connection_events, WEBSOCKET_CONNECTED_BIT | NETWORK_SUSPENDED_BIT,
+        pdFALSE, pdFALSE, pdMS_TO_TICKS(10000));
+    return (bits & WEBSOCKET_CONNECTED_BIT) != 0 &&
+           (bits & NETWORK_SUSPENDED_BIT) == 0;
 }
 
 static void wait_with_jitter(size_t attempt)
@@ -183,7 +186,13 @@ static void wait_with_jitter(size_t attempt)
     const uint32_t jitter = jitter_limit > 0 ? esp_random() % (jitter_limit + 1U) : 0;
     const uint32_t delay = beacon_network_backoff_ms(attempt, jitter);
     ESP_LOGI(TAG, "Reconnect in %lu ms", (unsigned long)delay);
-    vTaskDelay(pdMS_TO_TICKS(delay));
+    uint32_t remaining = delay;
+    while (remaining > 0U &&
+           (xEventGroupGetBits(connection_events) & NETWORK_SUSPENDED_BIT) == 0) {
+        const uint32_t slice = remaining > 100U ? 100U : remaining;
+        vTaskDelay(pdMS_TO_TICKS(slice));
+        remaining -= slice;
+    }
 }
 
 static void network_task(void *argument)
@@ -198,11 +207,20 @@ static void network_task(void *argument)
     size_t wifi_attempt = 0;
     size_t websocket_attempt = 0;
     while (true) {
+        if ((xEventGroupGetBits(connection_events) & NETWORK_SUSPENDED_BIT) != 0) {
+            destroy_websocket();
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
         if ((xEventGroupGetBits(connection_events) & WIFI_CONNECTED_BIT) == 0) {
             ESP_LOGI(TAG, "Connecting Wi-Fi (attempt %u)", (unsigned int)(wifi_attempt + 1U));
             esp_wifi_connect();
-            const EventBits_t bits = xEventGroupWaitBits(connection_events, WIFI_CONNECTED_BIT,
-                                                         pdFALSE, pdTRUE, pdMS_TO_TICKS(15000));
+            const EventBits_t bits = xEventGroupWaitBits(
+                connection_events, WIFI_CONNECTED_BIT | NETWORK_SUSPENDED_BIT,
+                pdFALSE, pdFALSE, pdMS_TO_TICKS(15000));
+            if ((bits & NETWORK_SUSPENDED_BIT) != 0) {
+                continue;
+            }
             if ((bits & WIFI_CONNECTED_BIT) == 0) {
                 wait_with_jitter(wifi_attempt++);
                 continue;
@@ -219,7 +237,8 @@ static void network_task(void *argument)
         websocket_attempt = 0;
 
         while ((xEventGroupGetBits(connection_events) &
-                (WIFI_CONNECTED_BIT | WEBSOCKET_CONNECTED_BIT)) ==
+                (WIFI_CONNECTED_BIT | WEBSOCKET_CONNECTED_BIT |
+                 NETWORK_SUSPENDED_BIT)) ==
                (WIFI_CONNECTED_BIT | WEBSOCKET_CONNECTED_BIT)) {
             beacon_network_message_t outgoing = {0};
             if (xQueueReceive(transmit_queue, &outgoing, pdMS_TO_TICKS(100)) == pdTRUE) {
@@ -280,11 +299,28 @@ esp_err_t beacon_network_start(const beacon_network_config_t *config)
     return ESP_OK;
 }
 
+void beacon_network_set_suspended(bool suspended)
+{
+    if (!network_started || connection_events == NULL) {
+        return;
+    }
+    if (suspended) {
+        xEventGroupSetBits(connection_events, NETWORK_SUSPENDED_BIT);
+        xEventGroupClearBits(connection_events, WEBSOCKET_CONNECTED_BIT);
+        beacon_network_message_t pending = {0};
+        while (transmit_queue != NULL && xQueueReceive(transmit_queue, &pending, 0) == pdTRUE) {
+            beacon_network_message_release(&pending);
+        }
+    } else {
+        xEventGroupClearBits(connection_events, NETWORK_SUSPENDED_BIT);
+    }
+}
+
 bool beacon_network_is_connected(void)
 {
     return network_started &&
            (xEventGroupGetBits(connection_events) &
-            (WIFI_CONNECTED_BIT | WEBSOCKET_CONNECTED_BIT)) ==
+            (WIFI_CONNECTED_BIT | WEBSOCKET_CONNECTED_BIT | NETWORK_SUSPENDED_BIT)) ==
                (WIFI_CONNECTED_BIT | WEBSOCKET_CONNECTED_BIT);
 }
 

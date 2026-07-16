@@ -29,6 +29,32 @@ int main(void)
            state->codex.token_rate.tokens_per_second < 42.8f);
     assert(state->codex.token_rate.active_sessions == 2);
     assert(state->codex.token_rate.active_streams == 3);
+
+    assert(strcmp(beacon_ui_connection_status_label(
+                      true, true, true, BEACON_FRESHNESS_FRESH,
+                      BEACON_TRANSPORT_USB),
+                  "USB 在线") == 0);
+    assert(strcmp(beacon_ui_connection_status_label(
+                      true, true, true, BEACON_FRESHNESS_CACHED,
+                      BEACON_TRANSPORT_WIFI),
+                  "WiFi 在线") == 0);
+    assert(strcmp(beacon_ui_connection_status_label(
+                      true, true, true, BEACON_FRESHNESS_STALE,
+                      BEACON_TRANSPORT_USB),
+                  "USB 部分可用") == 0);
+    assert(strcmp(beacon_ui_connection_status_label(
+                      true, true, true, BEACON_FRESHNESS_STALE,
+                      BEACON_TRANSPORT_WIFI),
+                  "WiFi 部分可用") == 0);
+    assert(strcmp(beacon_ui_connection_status_label(
+                      true, false, true, BEACON_FRESHNESS_FRESH,
+                      BEACON_TRANSPORT_USB),
+                  "○ 离线") == 0);
+    assert(strcmp(beacon_ui_connection_status_label(
+                      true, true, true, BEACON_FRESHNESS_FRESH,
+                      BEACON_TRANSPORT_NONE),
+                  "○ 离线") == 0);
+
     beacon_token_rate_state_t previous_rate = state->codex.token_rate;
     beacon_token_rate_state_t current_rate = previous_rate;
     current_rate.tokens_per_second = 0.0f;

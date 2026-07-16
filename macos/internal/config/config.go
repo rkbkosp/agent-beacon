@@ -20,6 +20,16 @@ type ServerConfig struct {
 	TokenFile       string
 }
 
+type USBTransportConfig struct {
+	Enabled      bool
+	Port         string
+	ScanInterval time.Duration
+}
+
+type TransportsConfig struct {
+	USB USBTransportConfig
+}
+
 type NotificationsConfig struct {
 	QueueCapacity int
 	DedupeWindow  time.Duration
@@ -146,6 +156,7 @@ type ProvidersConfig struct {
 
 type Config struct {
 	Server        ServerConfig
+	Transports    TransportsConfig
 	Notifications NotificationsConfig
 	Providers     ProvidersConfig
 	Token         string
@@ -158,6 +169,13 @@ type rawConfig struct {
 		MaxRequestBytes int64  `yaml:"max_request_bytes"`
 		TokenFile       string `yaml:"token_file"`
 	} `yaml:"server"`
+	Transports struct {
+		USB struct {
+			Enabled      *bool  `yaml:"enabled"`
+			Port         string `yaml:"port"`
+			ScanInterval string `yaml:"scan_interval"`
+		} `yaml:"usb"`
+	} `yaml:"transports"`
 	Notifications struct {
 		QueueCapacity int    `yaml:"queue_capacity"`
 		DedupeWindow  string `yaml:"dedupe_window"`
@@ -258,6 +276,7 @@ type rawConfig struct {
 func Default() Config {
 	return Config{
 		Server:        ServerConfig{Listen: "0.0.0.0:8787", DeviceSendQueue: 64, MaxRequestBytes: 256 * 1024},
+		Transports:    TransportsConfig{USB: USBTransportConfig{Enabled: true, Port: "/dev/cu.usbmodem*", ScanInterval: time.Second}},
 		Notifications: NotificationsConfig{QueueCapacity: 16, DedupeWindow: time.Minute},
 		Providers: ProvidersConfig{
 			Mock: MockProviderConfig{Enabled: false},
@@ -323,6 +342,19 @@ func load(path string, requireToken bool) (Config, error) {
 		result.Server.MaxRequestBytes = raw.Server.MaxRequestBytes
 	}
 	result.Server.TokenFile = expandUserPath(raw.Server.TokenFile)
+	if raw.Transports.USB.Enabled != nil {
+		result.Transports.USB.Enabled = *raw.Transports.USB.Enabled
+	}
+	if raw.Transports.USB.Port != "" {
+		result.Transports.USB.Port = raw.Transports.USB.Port
+	}
+	if raw.Transports.USB.ScanInterval != "" {
+		value, err := positiveDuration("transports.usb.scan_interval", raw.Transports.USB.ScanInterval)
+		if err != nil {
+			return Config{}, err
+		}
+		result.Transports.USB.ScanInterval = value
+	}
 	if raw.Notifications.QueueCapacity != 0 {
 		result.Notifications.QueueCapacity = raw.Notifications.QueueCapacity
 	}

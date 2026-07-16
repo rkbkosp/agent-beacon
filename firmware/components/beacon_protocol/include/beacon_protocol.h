@@ -59,6 +59,7 @@ bool beacon_protocol_decode(const char *json, size_t length,
 
 typedef struct {
     const char *device_id;
+    const char *token;
 } beacon_protocol_config_t;
 
 esp_err_t beacon_protocol_start(const beacon_protocol_config_t *config);

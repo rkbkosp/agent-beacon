@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -26,24 +28,40 @@ const (
 )
 
 type client struct {
-	id         string
-	connection *websocket.Conn
-	send       chan []byte
-	done       chan struct{}
-	closeOnce  sync.Once
-	ready      atomic.Bool
+	id             string
+	transport      string
+	closeTransport func() error
+	send           chan []byte
+	done           chan struct{}
+	closeOnce      sync.Once
+	ready          atomic.Bool
 }
 
 func (client *client) close() {
 	client.closeOnce.Do(func() {
 		close(client.done)
-		_ = client.connection.Close()
+		if client.closeTransport != nil {
+			_ = client.closeTransport()
+		}
 	})
+}
+
+type DeviceTransport interface {
+	Name() string
+	ReadMessage(context.Context) ([]byte, error)
+	WriteMessage(context.Context, []byte) error
+	Close() error
 }
 
 type hub struct {
 	mu      sync.RWMutex
 	clients map[*client]struct{}
+}
+
+type DeviceConnection struct {
+	DeviceID  string `json:"device_id"`
+	Transport string `json:"transport"`
+	Ready     bool   `json:"ready"`
 }
 
 func newHub() *hub { return &hub{clients: make(map[*client]struct{})} }
@@ -83,11 +101,38 @@ func (hub *hub) broadcast(data []byte) {
 func (hub *hub) deviceIDs() []string {
 	hub.mu.RLock()
 	defer hub.mu.RUnlock()
-	ids := make([]string, 0, len(hub.clients))
+	unique := make(map[string]struct{}, len(hub.clients))
 	for current := range hub.clients {
-		ids = append(ids, current.id)
+		if current.id != "" {
+			unique[current.id] = struct{}{}
+		}
 	}
+	ids := make([]string, 0, len(unique))
+	for id := range unique {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
 	return ids
+}
+
+func (hub *hub) connections() []DeviceConnection {
+	hub.mu.RLock()
+	defer hub.mu.RUnlock()
+	connections := make([]DeviceConnection, 0, len(hub.clients))
+	for current := range hub.clients {
+		if current.id != "" {
+			connections = append(connections, DeviceConnection{
+				DeviceID: current.id, Transport: current.transport, Ready: current.ready.Load(),
+			})
+		}
+	}
+	sort.Slice(connections, func(left, right int) bool {
+		if connections[left].DeviceID != connections[right].DeviceID {
+			return connections[left].DeviceID < connections[right].DeviceID
+		}
+		return connections[left].Transport < connections[right].Transport
+	})
+	return connections
 }
 
 type Server struct {
@@ -188,6 +233,12 @@ func (server *Server) helloEnvelope() protocol.Envelope {
 	return envelope
 }
 
+func (server *Server) heartbeatEnvelope() protocol.Envelope {
+	envelope, _ := protocol.NewEnvelope(server.nextID("heartbeat"), protocol.TypeHeartbeat,
+		server.store.Revision(), time.Now().UTC(), protocol.Heartbeat{})
+	return envelope
+}
+
 func (server *Server) handleSnapshot(writer http.ResponseWriter, _ *http.Request) {
 	writeJSON(writer, http.StatusOK, server.snapshotEnvelope())
 }
@@ -206,7 +257,9 @@ func (server *Server) handleEvents(writer http.ResponseWriter, request *http.Req
 }
 
 func (server *Server) handleDevices(writer http.ResponseWriter, _ *http.Request) {
-	writeJSON(writer, http.StatusOK, map[string]any{"devices": server.hub.deviceIDs()})
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"devices": server.hub.deviceIDs(), "connections": server.hub.connections(),
+	})
 }
 
 func (server *Server) handleNotification(writer http.ResponseWriter, request *http.Request) {
@@ -479,11 +532,14 @@ func (server *Server) handleWebSocket(writer http.ResponseWriter, request *http.
 	if err != nil {
 		return
 	}
-	current := &client{id: deviceID, connection: connection, send: make(chan []byte, server.sendQueue), done: make(chan struct{})}
+	current := &client{
+		id: deviceID, transport: "wifi", closeTransport: connection.Close,
+		send: make(chan []byte, server.sendQueue), done: make(chan struct{}),
+	}
 	server.hub.add(current)
 	server.enqueue(current, server.helloEnvelope())
-	go server.writePump(current)
-	go server.readPump(current)
+	go server.writeWebSocket(current, connection)
+	go server.readWebSocket(current, connection)
 }
 
 func (server *Server) enqueue(current *client, envelope protocol.Envelope) {
@@ -498,60 +554,146 @@ func (server *Server) enqueue(current *client, envelope protocol.Envelope) {
 	}
 }
 
-func (server *Server) readPump(current *client) {
-	defer server.hub.remove(current)
-	current.connection.SetReadLimit(protocol.MaxMessageBytes)
-	_ = current.connection.SetReadDeadline(time.Now().Add(45 * time.Second))
-	current.connection.SetPongHandler(func(string) error {
-		return current.connection.SetReadDeadline(time.Now().Add(45 * time.Second))
-	})
-	for {
-		_, data, err := current.connection.ReadMessage()
-		if err != nil {
+func (server *Server) processDeviceMessage(current *client, data []byte) {
+	message, err := protocol.DecodeDeviceMessage(data)
+	if err != nil {
+		return
+	}
+	if message.ACK != nil {
+		if current.ready.Load() && message.ACK.DeviceID == current.id {
+			server.store.RecordACK(*message.ACK, time.Now().UTC())
+		}
+		return
+	}
+	switch message.Envelope.Type {
+	case protocol.TypeHello:
+		hello, decodeError := protocol.DecodePayload[protocol.Hello](*message.Envelope)
+		if decodeError != nil || hello.Role != "device" || hello.DeviceID == "" ||
+			(current.id != "" && hello.DeviceID != current.id) ||
+			(current.transport != "wifi" && !server.validToken(hello.AuthToken)) {
 			return
 		}
-		_ = current.connection.SetReadDeadline(time.Now().Add(45 * time.Second))
-		message, err := protocol.DecodeDeviceMessage(data)
-		if err != nil {
-			continue
+		if current.id == "" {
+			current.id = hello.DeviceID
+			server.hub.add(current)
 		}
-		if message.ACK != nil {
-			if message.ACK.DeviceID == current.id {
-				server.store.RecordACK(*message.ACK, time.Now().UTC())
-			}
-			continue
+		if !current.ready.Load() {
+			server.enqueue(current, server.snapshotEnvelope())
+			current.ready.Store(true)
 		}
-		switch message.Envelope.Type {
-		case protocol.TypeHello:
-			hello, decodeError := protocol.DecodePayload[protocol.Hello](*message.Envelope)
-			if decodeError == nil && hello.Role == "device" && hello.DeviceID == current.id {
-				server.enqueue(current, server.snapshotEnvelope())
-				current.ready.Store(true)
-			}
-		case protocol.TypeGetSnapshot:
+	case protocol.TypeGetSnapshot:
+		if current.ready.Load() {
 			server.enqueue(current, server.snapshotEnvelope())
 		}
 	}
 }
 
-func (server *Server) writePump(current *client) {
+func (server *Server) readWebSocket(current *client, connection *websocket.Conn) {
+	defer server.hub.remove(current)
+	connection.SetReadLimit(protocol.MaxMessageBytes)
+	_ = connection.SetReadDeadline(time.Now().Add(45 * time.Second))
+	connection.SetPongHandler(func(string) error {
+		return connection.SetReadDeadline(time.Now().Add(45 * time.Second))
+	})
+	for {
+		_, data, err := connection.ReadMessage()
+		if err != nil {
+			return
+		}
+		_ = connection.SetReadDeadline(time.Now().Add(45 * time.Second))
+		server.processDeviceMessage(current, data)
+	}
+}
+
+func (server *Server) writeWebSocket(current *client, connection *websocket.Conn) {
 	ticker := time.NewTicker(20 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case data := <-current.send:
-			_ = current.connection.SetWriteDeadline(time.Now().Add(5 * time.Second))
-			if err := current.connection.WriteMessage(websocket.TextMessage, data); err != nil {
+			_ = connection.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			if err := connection.WriteMessage(websocket.TextMessage, data); err != nil {
 				server.hub.remove(current)
 				return
 			}
 		case <-ticker.C:
-			_ = current.connection.SetWriteDeadline(time.Now().Add(5 * time.Second))
-			if err := current.connection.WriteMessage(websocket.PingMessage, nil); err != nil {
+			_ = connection.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			if err := connection.WriteMessage(websocket.PingMessage, nil); err != nil {
 				server.hub.remove(current)
 				return
 			}
 		case <-current.done:
+			return
+		}
+	}
+}
+
+func (server *Server) ServeDeviceTransport(ctx context.Context, transport DeviceTransport) error {
+	current := &client{
+		transport: transport.Name(), closeTransport: transport.Close,
+		send: make(chan []byte, server.sendQueue), done: make(chan struct{}),
+	}
+	defer server.hub.remove(current)
+	go func() {
+		select {
+		case <-ctx.Done():
+			current.close()
+		case <-current.done:
+		}
+	}()
+	handshakeTimer := time.AfterFunc(15*time.Second, func() {
+		if !current.ready.Load() {
+			current.close()
+		}
+	})
+	defer handshakeTimer.Stop()
+	server.enqueue(current, server.helloEnvelope())
+	go server.writeDeviceTransport(ctx, current, transport)
+	for {
+		data, err := transport.ReadMessage(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		}
+		server.processDeviceMessage(current, data)
+	}
+}
+
+func (server *Server) writeDeviceTransport(ctx context.Context, current *client,
+	transport DeviceTransport) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	write := func(envelope protocol.Envelope) bool {
+		data, err := json.Marshal(envelope)
+		if err == nil {
+			err = transport.WriteMessage(ctx, data)
+		}
+		if err != nil {
+			server.hub.remove(current)
+			return false
+		}
+		return true
+	}
+	for {
+		select {
+		case data := <-current.send:
+			if err := transport.WriteMessage(ctx, data); err != nil {
+				server.hub.remove(current)
+				return
+			}
+		case <-ticker.C:
+			if current.ready.Load() {
+				if !write(server.heartbeatEnvelope()) {
+					return
+				}
+			} else if !write(server.helloEnvelope()) {
+				return
+			}
+		case <-current.done:
+			return
+		case <-ctx.Done():
 			return
 		}
 	}

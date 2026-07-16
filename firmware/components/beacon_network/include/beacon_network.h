@@ -37,6 +37,7 @@ typedef struct {
 } beacon_network_message_t;
 
 esp_err_t beacon_network_start(const beacon_network_config_t *config);
+void beacon_network_set_suspended(bool suspended);
 bool beacon_network_is_connected(void);
 bool beacon_network_receive(beacon_network_message_t *message, TickType_t timeout);
 void beacon_network_message_release(beacon_network_message_t *message);

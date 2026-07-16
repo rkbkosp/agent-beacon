@@ -2,7 +2,9 @@
 
 本文档描述 Agent Beacon Bridge 向设备或其他客户端传输 Codex Token 速率的接口。
 接口属于 Agent Beacon Protocol v2，不提供单独的 `/token-rate` 路由；速率数据固定放在
-`codex.token_rate`，通过 HTTP 快照或 WebSocket 实时状态更新下发。
+`codex.token_rate`，通过 HTTP 快照或实时设备传输下发。设备默认走 USB CDC，Wi-Fi
+WebSocket 作为兜底；本页的 HTTP/WebSocket 接口仍供外部客户端使用，USB 外层帧见
+[`usb-transport.md`](usb-transport.md)。
 
 ## 1. 指标定义
 

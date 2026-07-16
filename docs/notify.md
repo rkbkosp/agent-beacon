@@ -909,8 +909,8 @@ notifications:
 ## 14. 固件任务边界
 
 ```text
-network_task
-  接收 WebSocket 帧，投递原始消息
+transport tasks
+  校验 USB COBS/CRC 或重组 WebSocket 帧，投递原始消息
 
 protocol_task
   解析、校验、生成内部 notification struct
@@ -927,7 +927,7 @@ storage_task
 
 禁止：
 
-- WebSocket 回调直接创建/删除 LVGL 对象；
+- USB/WebSocket 接收回调直接创建/删除 LVGL 对象；
 - UI 动画回调修改通知堆；
 - 多任务无锁访问 pending queue；
 - 固件依据 category 猜测主题和优先级。

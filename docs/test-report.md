@@ -520,3 +520,54 @@ rebuilt image passed the factory-backup guard and esptool hash verification on
 `/dev/cu.usbmodem21201`; after boot it connected to the production WebSocket and
 accepted the full snapshot at revision 4, then patches through revision 6,
 without a panic or reset.
+
+## 2026-07-16 Type-C USB Primary Transport
+
+The ESP32-S3 USB-Serial/JTAG CDC now carries framed protocol v2 traffic as the
+primary device transport. Wi-Fi remains associated but its WebSocket is paused
+after the first valid USB frame; disconnect or 12 seconds without a valid host
+heartbeat restores the existing WebSocket path and performs a fresh
+hello/snapshot exchange.
+
+Automated and build verification:
+
+```text
+COBS/CRC frame round-trip, corruption, resync, limits    PASS
+macOS fragmented tty reads, writes, timeout EOF          PASS
+USB hello/token/snapshot/broadcast/ACK integration       PASS
+invalid USB device token                                 rejected
+configuration defaults and explicit disablement          PASS
+repository make test                                     PASS
+Go race detector                                         PASS
+ESP-IDF v5.5.4 build                                     PASS
+agent_beacon.bin                                         0x4ae440 bytes
+application partition free                              41%
+```
+
+The image passed the factory-backup guard and esptool hash verification on the
+connected physical board. The installed LaunchAgent held the USB modem steadily
+for more than 15 seconds, `/v2/devices` reported one ready `usb:` connection,
+and the firmware had no active device WebSocket. A real HTTP notification then
+traversed the shared device Hub over USB and produced `received`, `shown`, and
+`completed` ACKs.
+
+Failover was validated by stopping the USB-capable LaunchAgent and running the
+Bridge with `serve --disable-usb`. After the 12-second device timeout,
+`/v2/devices` reported the same board ready over `wifi` and the LAN WebSocket was
+established. Restarting the production service returned the board to USB.
+Finally, `make detect-device` confirmed that maintenance scripts automatically
+release the CDC port for esptool and restore the Bridge afterward.
+
+## 2026-07-16 Transport-Aware Header Status
+
+Every carousel and diagnostics header now reports the active business link as
+`USB 在线` or `WiFi 在线`. Provider degradation keeps the transport visible as
+`USB 部分可用` or `WiFi 部分可用`; a link switch clears snapshot readiness until
+the new transport completes synchronization.
+
+Host model tests cover both transports, stale state, disconnect, and an invalid
+transport kind. The four labels measure 59, 61, 87, and 89 pixels respectively
+with the production 14 px Milan font, fitting the narrowest 90 px header slot.
+`make test` and the ESP-IDF build passed; the `0x4ae520` image leaves 41% of the
+application partition free. Flashing passed all esptool hash checks, and the
+restarted Bridge reported the physical device ready over USB.

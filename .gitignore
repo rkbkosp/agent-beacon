@@ -3,6 +3,7 @@
 
 # ESP-IDF generated files and downloaded components
 /firmware/build/
+/firmware/.cache/
 /firmware/managed_components/
 /firmware/sdkconfig
 /firmware/sdkconfig.old

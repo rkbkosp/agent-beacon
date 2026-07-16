@@ -32,6 +32,11 @@ shared system status shown in every header. Other page domains remain a silent
 background update and render from the latest model on the next page switch.
 Notifications continue to suppress carousel redraws while visible.
 
+Every page header names the active device link as `USB 在线` or `WiFi 在线`.
+Stale provider state retains the transport name as `USB 部分可用` or
+`WiFi 部分可用`; a transport switch clears ready state until the new session's
+snapshot arrives, then redraws the visible header.
+
 The Codex page uses a split dashboard: an LVGL 240-degree meter occupies the
 left 160 px and displays the daemon's global estimated visible-output rate in
 `tok/s`; the right 142 px contains two compact weekly-quota fuel bars, reset-card

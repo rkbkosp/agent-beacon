@@ -4,9 +4,9 @@
 #include "beacon_app_state.h"
 #include "beacon_button.h"
 #include "beacon_diagnostics.h"
-#include "beacon_network.h"
 #include "beacon_notifications.h"
 #include "beacon_protocol.h"
+#include "beacon_transport.h"
 #include "beacon_ui.h"
 #include "beacon_ui_state.h"
 #include "board_ws_147b.h"
@@ -35,6 +35,7 @@ static beacon_notification_transition_t replay_transition;
 static beacon_notification_transition_t completed_transition;
 static beacon_notification_transition_t offer_transition;
 static bool last_transport_connected;
+static beacon_transport_kind_t last_transport_kind = BEACON_TRANSPORT_NONE;
 static bool connection_snapshot_ready;
 
 static int64_t wall_clock_ms(void)
@@ -107,17 +108,25 @@ static void refresh_current_surface(const beacon_ui_state_t *ui_state)
 
 static void refresh_on_transport_change(const beacon_ui_state_t *ui_state)
 {
-    const bool transport_connected = beacon_network_is_connected();
-    if (transport_connected == last_transport_connected) {
+    const bool transport_connected = beacon_transport_is_connected();
+    const beacon_transport_kind_t transport_kind = beacon_transport_active_kind();
+    if (transport_connected == last_transport_connected &&
+        transport_kind == last_transport_kind) {
         return;
     }
     last_transport_connected = transport_connected;
-    connection_snapshot_ready = beacon_ui_connection_snapshot_ready(
-        connection_snapshot_ready, transport_connected, false);
+    last_transport_kind = transport_kind;
+    connection_snapshot_ready = false;
     beacon_ui_set_connection_snapshot_ready(connection_snapshot_ready);
     refresh_current_surface(ui_state);
-    ESP_LOGI(TAG, "Protocol transport %s; refreshed local connection status",
-             transport_connected ? "connected" : "disconnected");
+    const char *transport_name = "disconnected";
+    if (transport_kind == BEACON_TRANSPORT_USB) {
+        transport_name = "USB";
+    } else if (transport_kind == BEACON_TRANSPORT_WIFI) {
+        transport_name = "Wi-Fi";
+    }
+    ESP_LOGI(TAG, "Protocol transport changed to %s; awaiting snapshot",
+             transport_name);
 }
 
 static void apply_protocol_state(const beacon_protocol_message_t *message,
@@ -132,7 +141,7 @@ static void apply_protocol_state(const beacon_protocol_message_t *message,
         (message->state_domains & BEACON_STATE_DOMAIN_AGENTS) != 0U &&
         beacon_ui_state_set_codex_active(ui_state, app_state.agents.codex_active);
     connection_snapshot_ready = beacon_ui_connection_snapshot_ready(
-        connection_snapshot_ready, beacon_network_is_connected(),
+        connection_snapshot_ready, beacon_transport_is_connected(),
         message->type == BEACON_PROTOCOL_MESSAGE_SNAPSHOT);
     beacon_ui_set_app_state(&app_state);
     beacon_ui_set_connection_snapshot_ready(connection_snapshot_ready);
@@ -150,22 +159,29 @@ static void apply_protocol_state(const beacon_protocol_message_t *message,
              message->state_domains, (unsigned long long)message->revision);
 }
 
-static void start_network_if_configured(void)
+static void start_transport_if_configured(void)
 {
 #if BEACON_HAS_NETWORK_CONFIG
-    const beacon_network_config_t network_config = {
-        .wifi_ssid = BEACON_WIFI_SSID,
-        .wifi_password = BEACON_WIFI_PASSWORD,
-        .websocket_uri = BEACON_WEBSOCKET_URI,
+    const beacon_transport_config_t transport_config = {
+        .network = {
+            .wifi_ssid = BEACON_WIFI_SSID,
+            .wifi_password = BEACON_WIFI_PASSWORD,
+            .websocket_uri = BEACON_WEBSOCKET_URI,
+            .device_id = BEACON_DEVICE_ID,
+            .token = BEACON_BRIDGE_TOKEN,
+        },
+        .usb_enabled = true,
+    };
+    const esp_err_t transport_error = beacon_transport_start(&transport_config);
+    if (transport_error != ESP_OK) {
+        ESP_LOGE(TAG, "Protocol transport disabled: %s",
+                 esp_err_to_name(transport_error));
+        return;
+    }
+    const beacon_protocol_config_t protocol_config = {
         .device_id = BEACON_DEVICE_ID,
         .token = BEACON_BRIDGE_TOKEN,
     };
-    const esp_err_t network_error = beacon_network_start(&network_config);
-    if (network_error != ESP_OK) {
-        ESP_LOGE(TAG, "Network disabled: %s", esp_err_to_name(network_error));
-        return;
-    }
-    const beacon_protocol_config_t protocol_config = {.device_id = BEACON_DEVICE_ID};
     const esp_err_t protocol_error = beacon_protocol_start(&protocol_config);
     if (protocol_error != ESP_OK) {
         ESP_LOGE(TAG, "Protocol disabled: %s", esp_err_to_name(protocol_error));
@@ -187,7 +203,7 @@ void app_main(void)
     beacon_app_state_init_mock(&app_state);
     beacon_ui_set_app_state(&app_state);
     beacon_ui_show_page(ui_state.page);
-    start_network_if_configured();
+    start_transport_if_configured();
 
     int64_t previous_time_us = esp_timer_get_time();
     int64_t previous_diagnostics_sample_us = previous_time_us;

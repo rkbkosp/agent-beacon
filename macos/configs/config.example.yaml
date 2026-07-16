@@ -4,6 +4,12 @@ server:
   max_request_bytes: 262144
   token_file: "~/Library/Application Support/AgentBeacon/token"
 
+transports:
+  usb:
+    enabled: true
+    port: "/dev/cu.usbmodem*"
+    scan_interval: 1s
+
 notifications:
   queue_capacity: 14
   dedupe_window: 60s

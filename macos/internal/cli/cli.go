@@ -24,6 +24,7 @@ import (
 	"agent-beacon/internal/providers/relaybalance"
 	"agent-beacon/internal/secrets"
 	"agent-beacon/internal/state"
+	"agent-beacon/internal/usbtransport"
 )
 
 const defaultServer = "http://127.0.0.1:8787"
@@ -70,6 +71,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "configs/config.example.yaml", "YAML configuration path")
+	disableUSB := flags.Bool("disable-usb", false, "disable USB device transport for this run")
 	if flags.Parse(args) != nil {
 		return 2
 	}
@@ -77,6 +79,9 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	if *disableUSB {
+		settings.Transports.USB.Enabled = false
 	}
 	snapshot := runtimeSnapshot(settings)
 	activeProviders := make([]providers.Provider, 0, 3)
@@ -146,9 +151,21 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	bridge := api.NewServerWithLimits(store, snapshot, settings.Token,
 		settings.Server.DeviceSendQueue, settings.Server.MaxRequestBytes)
 	bridge.SetFixturesEnabled(settings.Providers.Mock.Enabled)
-	httpServer := &http.Server{Addr: settings.Server.Listen, Handler: bridge.Handler(), ReadHeaderTimeout: 5 * time.Second}
+	httpServer := &http.Server{
+		Addr: settings.Server.Listen, Handler: bridge.Handler(),
+		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second,
+		WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second,
+	}
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	go usbtransport.Run(ctx, usbtransport.Config{
+		Enabled: settings.Transports.USB.Enabled, Port: settings.Transports.USB.Port,
+		ScanInterval: settings.Transports.USB.ScanInterval,
+	}, func(sessionContext context.Context, transport usbtransport.MessageTransport) error {
+		return bridge.ServeDeviceTransport(sessionContext, transport)
+	}, func(format string, arguments ...any) {
+		fmt.Fprintf(stderr, format+"\n", arguments...)
+	})
 	updates := make(chan providers.Update, settings.Server.DeviceSendQueue)
 	for _, currentProvider := range activeProviders {
 		currentProvider := currentProvider

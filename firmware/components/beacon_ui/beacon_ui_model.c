@@ -45,6 +45,26 @@ const beacon_app_state_t *beacon_ui_default_app_state(void)
     return &state;
 }
 
+const char *beacon_ui_connection_status_label(bool bridge_online,
+                                              bool transport_connected,
+                                              bool snapshot_ready,
+                                              beacon_freshness_t freshness,
+                                              beacon_transport_kind_t transport_kind)
+{
+    if (!beacon_ui_connection_is_online(bridge_online, transport_connected,
+                                        snapshot_ready)) {
+        return "○ 离线";
+    }
+    switch (transport_kind) {
+    case BEACON_TRANSPORT_USB:
+        return freshness == BEACON_FRESHNESS_STALE ? "USB 部分可用" : "USB 在线";
+    case BEACON_TRANSPORT_WIFI:
+        return freshness == BEACON_FRESHNESS_STALE ? "WiFi 部分可用" : "WiFi 在线";
+    default:
+        return "○ 离线";
+    }
+}
+
 bool beacon_ui_token_rate_drops_to_zero(const beacon_token_rate_state_t *previous,
                                         const beacon_token_rate_state_t *current)
 {

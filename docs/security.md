@@ -31,17 +31,28 @@ enter this path.
 
 The MVP device receives short status labels and notification summaries. It does
 not store email bodies, OAuth tokens, API keys, full Agent logs, or complete
-Codex sessions. RGB, TF, BLE, and USB business transports remain disabled.
+Codex sessions. RGB, TF, and BLE remain disabled. USB business traffic is limited
+to token-authenticated, CRC-checked protocol v2 envelopes and is not persisted.
 
-## Current Network Scope
+## Current Transport Scope
 
-M2 uses an authenticated but unencrypted WebSocket on the trusted local LAN.
+The Type-C business channel is the default device path. Application logs remain
+on UART0 so they cannot be interpreted as business frames. A USB device must send
+the provisioned Bridge Token in its device hello before the Bridge registers it.
+Physical access still permits reflashing or replacing the device, so USB is not a
+defense against an attacker who controls the host or cable endpoint.
+
+Wi-Fi fallback uses an authenticated but unencrypted WebSocket on the trusted local LAN.
 The `/v2/ws` handshake requires device ID, token, and protocol-version headers;
-protected HTTP endpoints require the same token. Do not expose port 8787 to the
+protected HTTP endpoints, including the notification-producing
+`POST /v2/notifications`, require the same token. Possession of this token allows
+content to be shown on every connected device, so it must not be embedded in
+web pages, logs, or third-party webhook URLs. Do not expose port 8787 to the
 public internet. A production remote deployment must use authenticated TLS and
-provisioned per-device credentials rather than the M2 shared `ws://` token.
+separate producer/device credentials rather than the M2 shared `ws://` token.
 
-The bridge caps HTTP bodies at 256 KiB and WebSocket messages at 64 KiB. The
-firmware reassembles valid fragmented WebSocket text messages up to 64 KiB, and
-rejects oversized, invalid-UTF-8, version-mismatched, unknown-enum, or invalid
-JSON messages before they reach the UI queue.
+The bridge caps HTTP bodies at 256 KiB and device messages at 64 KiB. The
+firmware reassembles fragmented WebSocket text or validates USB COBS length and
+CRC before accepting a message, then rejects oversized, invalid-UTF-8,
+version-mismatched, unknown-enum, or invalid JSON messages before they reach the
+UI queue.

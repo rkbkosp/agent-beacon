@@ -15,6 +15,11 @@ func TestLoadAppliesDefaultsAndOverrides(t *testing.T) {
 server:
   listen: "127.0.0.1:9999"
   max_request_bytes: 131072
+transports:
+  usb:
+    enabled: false
+    port: /dev/cu.usbmodem-test
+    scan_interval: 250ms
 notifications:
   dedupe_window: 90s
 providers:
@@ -36,6 +41,10 @@ providers:
 	if got.Server.Listen != "127.0.0.1:9999" || got.Server.DeviceSendQueue != 64 || got.Server.MaxRequestBytes != 131072 {
 		t.Fatalf("server config = %+v", got.Server)
 	}
+	if got.Transports.USB.Enabled || got.Transports.USB.Port != "/dev/cu.usbmodem-test" ||
+		got.Transports.USB.ScanInterval != 250*time.Millisecond {
+		t.Fatalf("USB transport config = %+v", got.Transports.USB)
+	}
 	if got.Token != "secret-from-env" {
 		t.Fatalf("token was not loaded from environment")
 	}
@@ -50,6 +59,22 @@ providers:
 		got.Providers.Herdr.ReconnectMax != 12*time.Second ||
 		got.Providers.Herdr.FullResyncInterval != 45*time.Second {
 		t.Fatalf("herdr config = %+v", got.Providers.Herdr)
+	}
+}
+
+func TestUSBTransportDefaultsToAutomaticDiscovery(t *testing.T) {
+	t.Setenv("AGENT_BEACON_TOKEN", "bridge-secret")
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("server:\n  listen: 127.0.0.1:8787\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Transports.USB.Enabled || got.Transports.USB.Port != "/dev/cu.usbmodem*" ||
+		got.Transports.USB.ScanInterval != time.Second {
+		t.Fatalf("USB transport defaults = %+v", got.Transports.USB)
 	}
 }
 

@@ -135,6 +135,7 @@ type ACK struct {
 type Hello struct {
 	Role            string `json:"role"`
 	DeviceID        string `json:"device_id,omitempty"`
+	AuthToken       string `json:"auth_token,omitempty"`
 	ProtocolVersion int    `json:"protocol_version"`
 	FirmwareVersion string `json:"firmware_version,omitempty"`
 	BridgeVersion   string `json:"bridge_version,omitempty"`
@@ -376,7 +377,9 @@ func (envelope Envelope) Validate() error {
 		if err != nil {
 			return err
 		}
-		if value.ProtocolVersion != Version || (value.Role != "server" && value.Role != "device") {
+		if value.ProtocolVersion != Version || (value.Role != "server" && value.Role != "device") ||
+			(value.Role == "device" && value.DeviceID == "") || len(value.DeviceID) > 64 ||
+			len(value.AuthToken) > 128 {
 			return errors.New("invalid hello payload")
 		}
 	case TypeGetSnapshot:

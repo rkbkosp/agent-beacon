@@ -115,4 +115,5 @@ test:
 	@./tests/firmware/test_protocol_json.sh
 	@./tests/firmware/test_network_policy.sh
 	@./tests/firmware/test_network_frame.sh
+	@./tests/firmware/test_usb_frame.sh
 	@if [[ -f macos/go.mod ]]; then cd macos && go test ./...; fi

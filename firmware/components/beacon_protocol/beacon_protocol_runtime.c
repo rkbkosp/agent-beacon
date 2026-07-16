@@ -5,7 +5,7 @@
 #include <string.h>
 #include <time.h>
 
-#include "beacon_network.h"
+#include "beacon_transport.h"
 #include "cJSON.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -20,6 +20,7 @@ static const char *TAG = "beacon_protocol";
 static QueueHandle_t ui_message_queue;
 static beacon_revision_tracker_t revision_tracker;
 static char device_id[65];
+static char auth_token[129];
 static bool protocol_started;
 
 static void add_timestamp(cJSON *root)
@@ -53,7 +54,7 @@ static bool send_json(cJSON *root)
     if (output == NULL) {
         return false;
     }
-    const bool sent = beacon_network_send(output, strlen(output), pdMS_TO_TICKS(100));
+    const bool sent = beacon_transport_send(output, strlen(output), pdMS_TO_TICKS(100));
     free(output);
     return sent;
 }
@@ -72,6 +73,7 @@ static bool send_hello(void)
     add_envelope_fields(root, id, "hello", revision_tracker.current);
     cJSON_AddStringToObject(payload, "role", "device");
     cJSON_AddStringToObject(payload, "device_id", device_id);
+    cJSON_AddStringToObject(payload, "auth_token", auth_token);
     cJSON_AddNumberToObject(payload, "protocol_version", BEACON_PROTOCOL_VERSION);
     cJSON_AddStringToObject(payload, "firmware_version", "m2-v2");
     cJSON_AddItemToObject(root, "payload", payload);
@@ -99,7 +101,7 @@ static bool send_get_snapshot(const char *reason)
 
 bool beacon_protocol_send_ack(const beacon_notification_ack_t *ack)
 {
-    if (ack == NULL || ack->notification_id[0] == '\0' || !beacon_network_is_connected()) {
+    if (ack == NULL || ack->notification_id[0] == '\0' || !beacon_transport_is_connected()) {
         return false;
     }
     cJSON *root = cJSON_CreateObject();
@@ -143,19 +145,19 @@ static void protocol_task(void *argument)
     (void)argument;
     bool was_connected = false;
     while (true) {
-        const bool connected = beacon_network_is_connected();
+        const bool connected = beacon_transport_is_connected();
         if (connected && !was_connected) {
             ESP_LOGI(TAG, "Protocol transport connected; waiting for server hello");
         }
         was_connected = connected;
 
-        beacon_network_message_t incoming = {0};
-        if (!beacon_network_receive(&incoming, pdMS_TO_TICKS(100))) {
+        beacon_transport_message_t incoming = {0};
+        if (!beacon_transport_receive(&incoming, pdMS_TO_TICKS(100))) {
             continue;
         }
         beacon_protocol_message_t message;
         const bool decoded = beacon_protocol_decode(incoming.data, incoming.length, &message);
-        beacon_network_message_release(&incoming);
+        beacon_transport_message_release(&incoming);
         if (!decoded) {
             ESP_LOGW(TAG, "Rejected invalid protocol v2 message");
             continue;
@@ -221,9 +223,14 @@ esp_err_t beacon_protocol_start(const beacon_protocol_config_t *config)
         return ESP_ERR_INVALID_STATE;
     }
     ESP_RETURN_ON_FALSE(config != NULL && config->device_id != NULL &&
-                            config->device_id[0] != '\0' && strlen(config->device_id) < sizeof(device_id),
-                        ESP_ERR_INVALID_ARG, TAG, "Device ID is required or too long");
+                            config->token != NULL && config->device_id[0] != '\0' &&
+                            config->token[0] != '\0' &&
+                            strlen(config->device_id) < sizeof(device_id) &&
+                            strlen(config->token) < sizeof(auth_token),
+                        ESP_ERR_INVALID_ARG, TAG,
+                        "Device ID and transport token are required or too long");
     snprintf(device_id, sizeof(device_id), "%s", config->device_id);
+    snprintf(auth_token, sizeof(auth_token), "%s", config->token);
     ui_message_queue = xQueueCreate(PROTOCOL_UI_QUEUE_LENGTH, sizeof(beacon_protocol_message_t));
     ESP_RETURN_ON_FALSE(ui_message_queue != NULL, ESP_ERR_NO_MEM,
                         TAG, "Protocol UI queue allocation failed");

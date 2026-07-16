@@ -4,7 +4,7 @@
 #include <string.h>
 
 #include "beacon_fonts.h"
-#include "beacon_network.h"
+#include "beacon_transport.h"
 #include "beacon_ui_model.h"
 #include "board_ws_147b.h"
 #include "board_ws_147b_geometry.h"
@@ -45,7 +45,6 @@ static const uint32_t COLOR_RED = 0xe5484d;
 static const uint32_t COLOR_GREEN = 0x30a46c;
 
 #define TOKEN_RATE_GAUGE_MAX 240
-
 #define TOKEN_RATE_NEEDLE_RETURN_MS 1500U
 
 typedef struct {
@@ -145,15 +144,10 @@ static void create_header(const char *title, const char *suffix)
 
 static const char *connection_suffix(void)
 {
-    if (!beacon_ui_connection_is_online(app_state.system.bridge_online,
-                                        beacon_network_is_connected(),
-                                        connection_snapshot_ready)) {
-        return "○ 离线";
-    }
-    if (app_state.system.overall_freshness == BEACON_FRESHNESS_STALE) {
-        return "△ 部分可用";
-    }
-    return "● 在线";
+    return beacon_ui_connection_status_label(
+        app_state.system.bridge_online, beacon_transport_is_connected(),
+        connection_snapshot_ready, app_state.system.overall_freshness,
+        beacon_transport_active_kind());
 }
 
 static uint32_t quota_color(const beacon_codex_home_t *home)

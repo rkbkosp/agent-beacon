@@ -66,18 +66,19 @@ Herdr 首次报告任意 Codex session 从非活跃变为 `working` 时，立即
 - 页面使用固定网格，数据变化不得导致整体跳动；
 - 所有动态字符串先由 Mac 服务压缩，固件仍按像素宽度截断；
 - 时间统一按设备配置时区显示，默认 `Asia/Shanghai`；
-- 右上角连接状态只显示一个小图标，不占用主体空间。
+- 右上角连接状态显示当前业务链路，保持单行且不占用主体空间。
 
-### 1.3 连接状态图标
+### 1.3 连接状态
 
 ```text
-●  WebSocket 在线且数据新鲜
-◐  在线但部分 Provider stale
-○  设备离线，正在显示缓存
-×  协议或配置错误
+USB 在线          Type-C 主链路在线且数据新鲜
+WiFi 在线         WebSocket 兜底链路在线且数据新鲜
+USB 部分可用      Type-C 在线但部分 Provider stale
+WiFi 部分可用     WebSocket 在线但部分 Provider stale
+○ 离线            设备离线，正在显示缓存
 ```
 
-颜色只作为辅助信息，图标形状必须不同。
+连接文案必须随 USB/Wi-Fi 主链路切换刷新；颜色只作为辅助信息。
 
 ---
 
@@ -268,7 +269,7 @@ agent-beacon-bridge secret set zero-api-key --from-env ZERO_API_KEY
 
 ```text
 ┌──────────────────────────────────┐
-│ TOKEN 速度                ● 在线 │
+│ TOKEN 速度              USB 在线 │
 │       0   60       │ 油量·周配额 │
 │    ╭────────╮      │ MAIN    18% │
 │  240  42.7  120    │ ██░░░░░░░░  │

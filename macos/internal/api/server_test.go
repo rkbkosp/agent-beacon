@@ -2,11 +2,15 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +21,48 @@ import (
 )
 
 const testToken = "test-bridge-token"
+
+type channelDeviceTransport struct {
+	reads     chan []byte
+	writes    chan []byte
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+func newChannelDeviceTransport() *channelDeviceTransport {
+	return &channelDeviceTransport{
+		reads: make(chan []byte, 8), writes: make(chan []byte, 8), closed: make(chan struct{}),
+	}
+}
+
+func (*channelDeviceTransport) Name() string { return "usb:test" }
+
+func (transport *channelDeviceTransport) ReadMessage(ctx context.Context) ([]byte, error) {
+	select {
+	case data := <-transport.reads:
+		return data, nil
+	case <-transport.closed:
+		return nil, io.EOF
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (transport *channelDeviceTransport) WriteMessage(ctx context.Context, data []byte) error {
+	select {
+	case transport.writes <- append([]byte(nil), data...):
+		return nil
+	case <-transport.closed:
+		return io.ErrClosedPipe
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (transport *channelDeviceTransport) Close() error {
+	transport.closeOnce.Do(func() { close(transport.closed) })
+	return nil
+}
 
 func authorizedRequest(t *testing.T, method, rawURL string) *http.Request {
 	t.Helper()
@@ -79,6 +125,91 @@ func readEnvelope(t *testing.T, connection *websocket.Conn) protocol.Envelope {
 		t.Fatal(err)
 	}
 	return envelope
+}
+
+func readTransportEnvelope(t *testing.T, transport *channelDeviceTransport) protocol.Envelope {
+	t.Helper()
+	select {
+	case data := <-transport.writes:
+		envelope, err := protocol.Decode(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return envelope
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for device transport message")
+		return protocol.Envelope{}
+	}
+}
+
+func TestUSBDeviceTransportSharesHandshakeSnapshotAndBroadcastPath(t *testing.T) {
+	store := state.NewStore(time.Minute, 100)
+	bridge := NewServer(store, DefaultSnapshot(), testToken)
+	transport := newChannelDeviceTransport()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- bridge.ServeDeviceTransport(ctx, transport) }()
+
+	serverHello := readTransportEnvelope(t, transport)
+	if serverHello.Type != protocol.TypeHello {
+		t.Fatalf("first USB envelope type = %s", serverHello.Type)
+	}
+	deviceHello, err := protocol.NewEnvelope("hello-usb-device", protocol.TypeHello, 0,
+		time.Now().UTC(), protocol.Hello{Role: "device", DeviceID: "device-usb",
+			AuthToken: testToken, ProtocolVersion: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(deviceHello)
+	transport.reads <- data
+	snapshot := readTransportEnvelope(t, transport)
+	if snapshot.Type != protocol.TypeSnapshot {
+		t.Fatalf("post-handshake USB envelope type = %s", snapshot.Type)
+	}
+	ids := bridge.hub.deviceIDs()
+	if len(ids) != 1 || ids[0] != "device-usb" {
+		t.Fatalf("USB device IDs = %v", ids)
+	}
+	connections := bridge.hub.connections()
+	if len(connections) != 1 || connections[0].Transport != "usb:test" || !connections[0].Ready {
+		t.Fatalf("USB connections = %+v", connections)
+	}
+
+	notification := notificationEnvelope(t, "unused", "system:usb:broadcast", time.Now().Add(time.Minute))
+	payload, err := protocol.DecodePayload[protocol.Notification](notification)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := bridge.PublishNotification(payload)
+	if err != nil || receipt.Status != state.EventAccepted {
+		t.Fatalf("publish receipt=%+v err=%v", receipt, err)
+	}
+	received := readTransportEnvelope(t, transport)
+	if received.Type != protocol.TypeNotification || received.Revision != receipt.Revision {
+		t.Fatalf("USB broadcast = %+v", received)
+	}
+
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("ServeDeviceTransport returned %v", err)
+	}
+}
+
+func TestUSBDeviceHelloRequiresBridgeToken(t *testing.T) {
+	bridge := NewServer(state.NewStore(time.Minute, 10), DefaultSnapshot(), testToken)
+	current := &client{
+		transport: "usb:test", send: make(chan []byte, 1), done: make(chan struct{}),
+	}
+	hello, err := protocol.NewEnvelope("hello-usb-unauthorized", protocol.TypeHello, 0,
+		time.Now().UTC(), protocol.Hello{Role: "device", DeviceID: "device-usb", ProtocolVersion: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(hello)
+	bridge.processDeviceMessage(current, data)
+	if current.id != "" || current.ready.Load() || len(current.send) != 0 || len(bridge.hub.connections()) != 0 {
+		t.Fatal("unauthenticated USB device hello was accepted")
+	}
 }
 
 func dialDevice(t *testing.T, serverURL string) *websocket.Conn {
