@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	tokenRateMetric       = "visible_output_tokens_per_second"
+	tokenRateMetric       = "completion_output_tokens_per_second"
 	maxTokenRateStateSize = 64 * 1024
 	maxTokenRateWindowMS  = 10 * 60 * 1000
 	maxTokensPerSecond    = 10000
@@ -28,6 +28,7 @@ type tokenRateStateFile struct {
 	RawTokensPerSecond float64 `json:"raw_tokens_per_second"`
 	ActiveSessions     int     `json:"active_sessions"`
 	ActiveStreams      int     `json:"active_streams"`
+	ToolActiveStreams  *int    `json:"tool_active_streams"`
 	WindowMS           uint64  `json:"window_ms"`
 	UpdatedAtUnixMS    uint64  `json:"updated_at_unix_ms"`
 }
@@ -75,7 +76,9 @@ func readTokenRateState(path string, now time.Time, staleAfter time.Duration) (p
 	if invalidRate(stateFile.TokensPerSecond) || invalidRate(stateFile.RawTokensPerSecond) {
 		return protocol.TokenRateState{}, errors.New("token-rate state contains an invalid rate")
 	}
-	if stateFile.ActiveSessions < 0 || stateFile.ActiveStreams < 0 || stateFile.ActiveSessions > stateFile.ActiveStreams {
+	if stateFile.ToolActiveStreams == nil || stateFile.ActiveSessions < 0 || stateFile.ActiveStreams < 0 ||
+		*stateFile.ToolActiveStreams < 0 || stateFile.ActiveSessions > stateFile.ActiveStreams ||
+		*stateFile.ToolActiveStreams > stateFile.ActiveStreams {
 		return protocol.TokenRateState{}, errors.New("token-rate state contains invalid activity counts")
 	}
 	if stateFile.WindowMS == 0 || stateFile.WindowMS > maxTokenRateWindowMS ||

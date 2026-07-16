@@ -86,7 +86,7 @@ Herdr 首次报告任意 Codex session 从非活跃变为 `working` 时，立即
 
 同一页同时显示：
 
-1. 所有本机 patched Codex 进程的实时全局可见输出 Token 速度；
+1. 所有本机 patched Codex 进程的实时全局 completion-output Token 速度；
 2. 两个独立 `CODEX_HOME` 的一周配额；
 3. 每个 `CODEX_HOME` 的重置卡张数和最近过期时间；
 4. `0-0.pro` 中转站余额。
@@ -170,25 +170,27 @@ Home 的周配额相加、换算成速度，或自行扫描进程推算速度。
 指标名称必须精确为：
 
 ```text
-visible_output_tokens_per_second
+completion_output_tokens_per_second
 ```
 
-该指标是所有连接同一 Unix Datagram socket 的本机 patched Codex 进程之用户可见
-助手文本近似输出速率。它不包含 input token、hidden reasoning、工具参数、工具输出、
-认证信息或工作目录。daemon 以本地接收时间维护 2 秒滑动窗口并输出 EMA；Bridge
-不得对它再次平滑或按 Home 拆分。
+该指标是所有连接同一 Unix Datagram socket 的本机 patched Codex 进程之近似
+completion-output 速率，包含用户可见助手文本与流式工具调用参数。它不包含 input
+token、hidden reasoning、工具输出、认证信息或工作目录。daemon 以本地接收时间维护
+2 秒滑动窗口并输出 EMA；响应进入工具执行后维持该流最后一次速度，工具完成后释放。
+Bridge 不得对它再次平滑或按 Home 拆分。
 
 daemon v1 状态文件示例：
 
 ```json
 {
   "version": 1,
-  "metric": "visible_output_tokens_per_second",
+  "metric": "completion_output_tokens_per_second",
   "estimated": true,
   "tokens_per_second": 42.7,
   "raw_tokens_per_second": 48.0,
   "active_sessions": 2,
   "active_streams": 3,
+  "tool_active_streams": 1,
   "window_ms": 2000,
   "updated_at_unix_ms": 1784082660000
 }
@@ -197,7 +199,9 @@ daemon v1 状态文件示例：
 Bridge 规则：
 
 1. 状态文件必须是普通文件，权限不得宽于 `0600`；
-2. 严格校验 version、metric、estimated、非负有限速率、活动计数和时间戳；
+2. 严格校验 version、metric、estimated、非负有限速率、活动计数（包括
+   `tool_active_streams`）和时间戳；`tool_active_streams` 仅用于 daemon 合约校验，
+   当前不下发到设备；
 3. 默认每 200ms 读取，只有速度、活动计数或 freshness 的可见值变化才下发；
 4. 短暂读失败保留上次值并标记 `cached`，超过 2 秒后清空数值并标记 `stale`；
 5. daemon 正常运行但没有活跃输出时，`0.0` 是真实值，不得显示成“无数据”；

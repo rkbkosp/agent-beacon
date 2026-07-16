@@ -462,6 +462,34 @@ synthetic rate burst produced live Codex/System patches through revision 29
 without a panic or reset. Physical LCD inspection of exact needle geometry,
 spacing, and clipping remains a human visual acceptance step.
 
+## 2026-07-16 Completion-Output Token-Rate Contract Alignment
+
+The Bridge now consumes the current patched daemon contract,
+`completion_output_tokens_per_second`, and strictly validates the daemon-only
+`tool_active_streams` count without adding it to the device protocol. The patched Codex launcher
+uses Agent Beacon's published launchd socket when its inherited socket is unset or has been
+removed, preventing a stale standalone path from creating a second aggregate.
+
+Verification:
+
+```text
+make test                                             PASS
+go vet ./...                                          PASS
+go test -race ./...                                   PASS
+just fmt                                              PASS
+installed daemon SHA-256                              matches ../codex release
+LaunchAgent socket/state                              mode 0600
+real codex-patched exec                               daemon and Bridge near 60 tok/s
+real active session/stream counts                     1 / 1
+post-window Bridge snapshot                           fresh 0.0 tok/s
+remaining token-rate listeners                        one AgentBeacon socket
+stale TMPDIR launcher environment                     falls back to AgentBeacon socket
+```
+
+The standalone TMPDIR daemon was terminated after validation. Patched Codex processes that were
+already running before the migration still need a restart because their process environment cannot
+be changed retroactively; newly launched processes use the shared AgentBeacon socket.
+
 ## 2026-07-15 Herdr-Gated Token Dashboard Carousel
 
 The Herdr provider now publishes `agents.codex_active=true` only when at least

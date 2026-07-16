@@ -101,9 +101,10 @@ Bridge 还会下发 `agents.codex_active`：只要任意 Codex session 为 `work
 
 Token 速度依赖 `rust-v0.144.4` patched Codex 的 `codex-token-rate-daemon`。指标固定为
 所有连接同一 socket 的本机 patched Codex 进程之
-`visible_output_tokens_per_second`：只统计用户可见助手文本，使用 daemon 已聚合的
-2 秒窗口 EMA，不包含输入、reasoning、工具参数或工具输出。daemon 状态文件必须为
-0600；Bridge 每 200ms 读取一次，只在可见值变化时下发，2 秒没有新状态即显示过期。
+`completion_output_tokens_per_second`：统计用户可见助手文本和流式工具调用参数，使用
+daemon 已聚合的 2 秒窗口 EMA，不包含输入、hidden reasoning 或工具输出。响应进入工具
+执行后，daemon 会维持该流最后一次速度，直到工具执行结束。状态文件必须为 0600；
+Bridge 每 200ms 读取一次，只在可见值变化时下发，2 秒没有新状态即显示过期。
 
 前台调试时，先运行 `make token-rate-run`，再从另一个终端启动 patched Codex：
 
