@@ -16,7 +16,20 @@ OpenAI Codex `rust-v0.144.4`，并包含 daemon、测试、安装脚本和 Agent
 `series` 保留原提交边界；第一份 patch 含完整插桩和 daemon，后两份分别处理 Herdr
 进程身份与 AgentBeacon 单 socket 集成。第一份 patch 自带 `base-commit` 元数据。
 
-## 快速应用、编译和安装
+## 推荐：一键跟随上游 release
+
+在 agent-bacon 根目录运行：
+
+```bash
+./scripts/update-patched-codex.sh                 # 自动选择最新稳定 rust-vX.Y.Z
+./scripts/update-patched-codex.sh rust-v0.145.0  # 或显式指定 tag
+```
+
+该脚本会拉取 `origin` tags、拒绝脏工作树和已有同名分支、从 tag 创建
+`patch/token-rate-<tag>`，再调用本目录的 patch runner。若 `git am --3way` 冲突，脚本
+保留冲突现场并退出，等待手工执行 `git add` 与 `git am --continue`。
+
+## 手工应用、编译和安装
 
 先在 Codex 仓库中基于新的上游版本创建干净分支：
 

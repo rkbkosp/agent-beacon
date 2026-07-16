@@ -102,6 +102,7 @@ demo-events:
 test:
 	@./tests/scripts/test_m0_scripts.sh
 	@./tests/scripts/test_configure_network.sh
+	@./tests/scripts/test_update_patched_codex.sh
 	@./tests/scripts/test_install_fonts.sh
 	@./tests/firmware/test_calibration.sh
 	@./tests/firmware/test_board_geometry.sh
