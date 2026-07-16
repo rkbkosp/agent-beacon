@@ -4,6 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$SCRIPT_DIR/lib/idf-tools.sh"
+source "$SCRIPT_DIR/lib/bridge-service.sh"
 
 usage() {
   cat <<'EOF'
@@ -62,5 +63,7 @@ if [[ -z "$port" ]]; then
 fi
 
 printf 'PORT=%s\n' "$port"
+bridge_service_pause_for_serial "$port"
+trap 'bridge_service_resume || true' EXIT
 run_esptool -p "$port" read_mac
 run_esptool -p "$port" flash_id

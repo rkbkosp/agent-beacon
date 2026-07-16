@@ -5,6 +5,7 @@ set -euo pipefail
 readonly EXPECTED_FLASH_BYTES=16777216
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$SCRIPT_DIR/lib/idf-tools.sh"
+source "$SCRIPT_DIR/lib/bridge-service.sh"
 
 usage() {
   cat <<'EOF'
@@ -81,4 +82,6 @@ configure_esptool || \
   die "esptool is not active; source ~/.espressif/tools/activate_idf_v5.5.4.sh"
 
 printf 'Restoring %s to %s (SHA256=%s)\n' "$backup" "$port" "$actual_sha"
+bridge_service_pause_for_serial "$port"
+trap 'bridge_service_resume || true' EXIT
 run_esptool -p "$port" -b 460800 write_flash 0 "$backup"

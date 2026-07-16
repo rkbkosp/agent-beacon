@@ -6,6 +6,7 @@ readonly EXPECTED_FLASH_BYTES=16777216
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 source "$SCRIPT_DIR/lib/idf-tools.sh"
+source "$SCRIPT_DIR/lib/bridge-service.sh"
 
 usage() {
   cat <<'EOF'
@@ -71,6 +72,8 @@ done
   die "no valid 16 MB factory backup found in: $backup_dir"
 
 configure_idf || die "idf.py is unavailable; activate ESP-IDF v5.5.4 first"
+bridge_service_pause_for_serial "$port"
+trap 'bridge_service_resume || true' EXIT
 printf 'Factory backup guard: %s (SHA256=%s)\n' \
   "$valid_backup" "$(shasum -a 256 "$valid_backup" | awk '{print $1}')"
 printf 'Flashing firmware from %s to %s\n' "$firmware_dir" "$port"

@@ -6,6 +6,7 @@ readonly EXPECTED_FLASH_BYTES=16777216
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 source "$SCRIPT_DIR/lib/idf-tools.sh"
+source "$SCRIPT_DIR/lib/bridge-service.sh"
 
 usage() {
   cat <<'EOF'
@@ -74,7 +75,8 @@ cleanup_incomplete() {
     fi
   fi
 }
-trap cleanup_incomplete EXIT
+bridge_service_pause_for_serial "$port"
+trap 'cleanup_incomplete; bridge_service_resume || true' EXIT
 
 run_esptool -p "$port" -b 460800 read_flash 0 ALL "$output"
 
@@ -90,6 +92,7 @@ repo_sha=$(shasum -a 256 "$output" | awk '{print $1}')
 external_sha=$(shasum -a 256 "$external_copy" | awk '{print $1}')
 [[ "$repo_sha" == "$external_sha" ]] || die "external copy SHA-256 mismatch"
 
+bridge_service_resume
 trap - EXIT
 printf 'BACKUP=%s\nEXTERNAL=%s\nSIZE=%s\nSHA256=%s\n' \
   "$output" "$external_copy" "$size" "$repo_sha"
