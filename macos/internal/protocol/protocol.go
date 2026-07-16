@@ -361,6 +361,9 @@ func (envelope Envelope) Validate() error {
 	if envelope.ID == "" || envelope.TS.IsZero() || len(envelope.Payload) == 0 || bytes.Equal(envelope.Payload, []byte("null")) {
 		return errors.New("id, ts and payload are required")
 	}
+	if len(envelope.ID) > 64 {
+		return errors.New("id is too long")
+	}
 	switch envelope.Type {
 	case TypeNotification:
 		value, err := DecodePayload[Notification](envelope)
@@ -415,6 +418,10 @@ func (notification Notification) Validate() error {
 	if utf8.RuneCountInString(notification.Title) > 28 || utf8.RuneCountInString(notification.Detail) > 64 ||
 		utf8.RuneCountInString(notification.SourceLabel) > 12 {
 		return errors.New("notification text is too long")
+	}
+	if len(notification.Kind) > 64 || len(notification.Source) > 32 || len(notification.SubjectID) > 96 ||
+		len(notification.DedupeKey) > 160 || len(notification.SupersedeKey) > 128 || len(notification.GroupKey) > 96 {
+		return errors.New("notification identifier is too long")
 	}
 	switch notification.Category {
 	case CategoryAgent, CategoryQuota, CategoryWeather, CategorySystem:

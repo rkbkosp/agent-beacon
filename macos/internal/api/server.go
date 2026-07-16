@@ -3,7 +3,10 @@ package api
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
 	"strconv"
 	"sync"
@@ -100,6 +103,12 @@ type Server struct {
 	fixturesEnabled atomic.Bool
 }
 
+type NotificationReceipt struct {
+	Status   state.EventResult `json:"status"`
+	EventID  string            `json:"event_id"`
+	Revision uint64            `json:"revision,omitempty"`
+}
+
 func NewServer(store *state.Store, snapshot protocol.Snapshot, token string) *Server {
 	return NewServerWithLimits(store, snapshot, token, defaultDeviceSendQueue, defaultMaxRequestBytes)
 }
@@ -135,6 +144,7 @@ func (server *Server) Handler() http.Handler {
 	mux.Handle("GET /v2/snapshot", server.auth(http.HandlerFunc(server.handleSnapshot)))
 	mux.Handle("GET /v2/events", server.auth(http.HandlerFunc(server.handleEvents)))
 	mux.Handle("GET /v2/devices", server.auth(http.HandlerFunc(server.handleDevices)))
+	mux.Handle("POST /v2/notifications", server.auth(http.HandlerFunc(server.handleNotification)))
 	mux.Handle("POST /v2/fixtures/{name}", server.auth(http.HandlerFunc(server.handleFixture)))
 	mux.HandleFunc("GET /v2/ws", server.handleWebSocket)
 	return mux
@@ -199,6 +209,48 @@ func (server *Server) handleDevices(writer http.ResponseWriter, _ *http.Request)
 	writeJSON(writer, http.StatusOK, map[string]any{"devices": server.hub.deviceIDs()})
 }
 
+func (server *Server) handleNotification(writer http.ResponseWriter, request *http.Request) {
+	mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		writeJSON(writer, http.StatusUnsupportedMediaType, map[string]string{"error": "Content-Type must be application/json"})
+		return
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, server.maxRequestBytes)
+	data, err := io.ReadAll(request.Body)
+	if err != nil {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			writeJSON(writer, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body is too large"})
+			return
+		}
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "read request body"})
+		return
+	}
+	envelope, err := protocol.Decode(data)
+	if err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if envelope.Type != protocol.TypeNotification {
+		writeJSON(writer, http.StatusUnprocessableEntity, map[string]string{"error": "envelope type must be notification"})
+		return
+	}
+	if envelope.Revision != 0 {
+		writeJSON(writer, http.StatusUnprocessableEntity, map[string]string{"error": "notification revision must be 0"})
+		return
+	}
+
+	receipt := server.publishNotificationEnvelope(envelope, time.Now().UTC())
+	status := http.StatusAccepted
+	switch receipt.Status {
+	case state.EventDuplicate:
+		status = http.StatusOK
+	case state.EventExpired:
+		status = http.StatusGone
+	}
+	writeJSON(writer, status, receipt)
+}
+
 func (server *Server) handleFixture(writer http.ResponseWriter, request *http.Request) {
 	if !server.fixturesEnabled.Load() {
 		writeJSON(writer, http.StatusNotFound, map[string]string{"error": "fixtures are disabled"})
@@ -219,19 +271,36 @@ func (server *Server) handleFixture(writer http.ResponseWriter, request *http.Re
 	server.broadcast(patchEnvelope)
 	response := map[string]any{"status": "accepted", "fixture": request.PathValue("name"), "revision": patchRevision}
 	if fixture.Notification != nil {
-		event, envelopeError := protocol.NewEnvelope(server.nextID("evt"), protocol.TypeNotification, 0, time.Now().UTC(), *fixture.Notification)
-		if envelopeError != nil {
+		receipt, publishError := server.PublishNotification(*fixture.Notification)
+		if publishError != nil {
 			writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": "invalid fixture notification"})
 			return
 		}
-		result, accepted := server.store.AcceptEvent(event, time.Now())
-		response["event_status"] = result
-		if result == state.EventAccepted {
-			server.broadcast(accepted)
-			response["event_id"] = accepted.ID
+		response["event_status"] = receipt.Status
+		if receipt.Status == state.EventAccepted {
+			response["event_id"] = receipt.EventID
 		}
 	}
 	writeJSON(writer, http.StatusAccepted, response)
+}
+
+func (server *Server) PublishNotification(notification protocol.Notification) (NotificationReceipt, error) {
+	now := time.Now().UTC()
+	envelope, err := protocol.NewEnvelope(server.nextID("evt"), protocol.TypeNotification, 0, now, notification)
+	if err != nil {
+		return NotificationReceipt{}, fmt.Errorf("encode notification: %w", err)
+	}
+	return server.publishNotificationEnvelope(envelope, now), nil
+}
+
+func (server *Server) publishNotificationEnvelope(envelope protocol.Envelope, now time.Time) NotificationReceipt {
+	result, accepted := server.store.AcceptEvent(envelope, now)
+	receipt := NotificationReceipt{Status: result, EventID: envelope.ID}
+	if result == state.EventAccepted {
+		receipt.Revision = accepted.Revision
+		server.broadcast(accepted)
+	}
+	return receipt
 }
 
 func (server *Server) PublishProviderUpdate(update providers.Update) error {
@@ -250,14 +319,8 @@ func (server *Server) PublishProviderUpdate(update providers.Update) error {
 		server.broadcast(envelope)
 	}
 	if update.Notification != nil {
-		envelope, err := protocol.NewEnvelope(server.nextID("evt"), protocol.TypeNotification,
-			0, time.Now().UTC(), *update.Notification)
-		if err != nil {
-			return fmt.Errorf("encode provider notification: %w", err)
-		}
-		result, accepted := server.store.AcceptEvent(envelope, time.Now())
-		if result == state.EventAccepted {
-			server.broadcast(accepted)
+		if _, err := server.PublishNotification(*update.Notification); err != nil {
+			return fmt.Errorf("publish provider notification: %w", err)
 		}
 	}
 	return nil

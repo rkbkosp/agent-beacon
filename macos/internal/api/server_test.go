@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -25,6 +26,45 @@ func authorizedRequest(t *testing.T, method, rawURL string) *http.Request {
 	}
 	request.Header.Set("X-Agent-Beacon-Token", testToken)
 	return request
+}
+
+func notificationEnvelope(t *testing.T, id, dedupeKey string, expiresAt time.Time) protocol.Envelope {
+	t.Helper()
+	envelope, err := protocol.NewEnvelope(id, protocol.TypeNotification, 0, time.Now().UTC(), protocol.Notification{
+		Category: protocol.CategorySystem, Kind: "system.provider_error", Source: "http-test",
+		SubjectID: "listener", Theme: protocol.ThemeYellow, Urgency: protocol.UrgencyNormal,
+		Priority: 44, DedupeKey: dedupeKey, Title: "Listener test", Detail: "HTTP ingress",
+		SourceLabel: "Test", DisplayMS: 3000, ExpiresAt: expiresAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return envelope
+}
+
+func postNotification(t *testing.T, rawURL string, envelope protocol.Envelope) (*http.Response, NotificationReceipt) {
+	t.Helper()
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequest(http.MethodPost, rawURL, bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json; charset=utf-8")
+	request.Header.Set("X-Agent-Beacon-Token", testToken)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipt NotificationReceipt
+	if err := json.NewDecoder(response.Body).Decode(&receipt); err != nil {
+		response.Body.Close()
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	return response, receipt
 }
 
 func readEnvelope(t *testing.T, connection *websocket.Conn) protocol.Envelope {
@@ -62,10 +102,17 @@ func TestHealthIsPublicAndOtherHTTPRoutesRequireToken(t *testing.T) {
 	server := httptest.NewServer(NewServer(state.NewStore(time.Minute, 100), DefaultSnapshot(), testToken).Handler())
 	defer server.Close()
 	for _, testCase := range []struct {
-		path string
-		want int
-	}{{"/healthz", http.StatusOK}, {"/readyz", http.StatusUnauthorized}, {"/v2/snapshot", http.StatusUnauthorized}, {"/v1/snapshot", http.StatusNotFound}} {
-		response, err := http.Get(server.URL + testCase.path)
+		method string
+		path   string
+		want   int
+	}{{http.MethodGet, "/healthz", http.StatusOK}, {http.MethodGet, "/readyz", http.StatusUnauthorized},
+		{http.MethodGet, "/v2/snapshot", http.StatusUnauthorized}, {http.MethodPost, "/v2/notifications", http.StatusUnauthorized},
+		{http.MethodGet, "/v1/snapshot", http.StatusNotFound}} {
+		request, err := http.NewRequest(testCase.method, server.URL+testCase.path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := http.DefaultClient.Do(request)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -73,6 +120,155 @@ func TestHealthIsPublicAndOtherHTTPRoutesRequireToken(t *testing.T) {
 		if response.StatusCode != testCase.want {
 			t.Fatalf("GET %s = %d, want %d", testCase.path, response.StatusCode, testCase.want)
 		}
+	}
+}
+
+func TestHTTPNotificationIsAcceptedStoredAndBroadcast(t *testing.T) {
+	store := state.NewStore(time.Minute, 100)
+	bridge := NewServer(store, DefaultSnapshot(), testToken)
+	server := httptest.NewServer(bridge.Handler())
+	defer server.Close()
+
+	connection := dialDevice(t, server.URL)
+	defer connection.Close()
+	_ = readEnvelope(t, connection)
+	hello, err := protocol.NewEnvelope("device-hello-http", protocol.TypeHello, 0, time.Now().UTC(), protocol.Hello{
+		Role: "device", DeviceID: "device-test", ProtocolVersion: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := connection.WriteJSON(hello); err != nil {
+		t.Fatal(err)
+	}
+	_ = readEnvelope(t, connection)
+
+	submitted := notificationEnvelope(t, "evt-http-1", "system:http-listener:1", time.Now().Add(time.Minute))
+	response, receipt := postNotification(t, server.URL+"/v2/notifications", submitted)
+	if response.StatusCode != http.StatusAccepted || receipt.Status != state.EventAccepted ||
+		receipt.EventID != submitted.ID || receipt.Revision != 1 {
+		t.Fatalf("POST notification status=%d receipt=%+v", response.StatusCode, receipt)
+	}
+	received := readEnvelope(t, connection)
+	if received.Type != protocol.TypeNotification || received.ID != submitted.ID || received.Revision != receipt.Revision {
+		t.Fatalf("broadcast envelope = %+v", received)
+	}
+	events := store.Events(10)
+	if len(events) != 1 || events[0].ID != submitted.ID || events[0].Revision != receipt.Revision {
+		t.Fatalf("stored events = %+v", events)
+	}
+}
+
+func TestPublishNotificationUsesTheSameValidationAndDedupePath(t *testing.T) {
+	bridge := NewServer(state.NewStore(time.Minute, 100), DefaultSnapshot(), testToken)
+	envelope := notificationEnvelope(t, "unused", "system:in-process:dedupe", time.Now().Add(time.Minute))
+	notification, err := protocol.DecodePayload[protocol.Notification](envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := bridge.PublishNotification(notification)
+	if err != nil || receipt.Status != state.EventAccepted || receipt.EventID == "" || receipt.Revision != 1 {
+		t.Fatalf("first publish receipt=%+v err=%v", receipt, err)
+	}
+	receipt, err = bridge.PublishNotification(notification)
+	if err != nil || receipt.Status != state.EventDuplicate || receipt.Revision != 0 {
+		t.Fatalf("duplicate publish receipt=%+v err=%v", receipt, err)
+	}
+	notification.Title = ""
+	if _, err := bridge.PublishNotification(notification); err == nil {
+		t.Fatal("invalid in-process notification was accepted")
+	}
+}
+
+func TestHTTPNotificationReportsDuplicateAndExpired(t *testing.T) {
+	bridge := NewServer(state.NewStore(time.Minute, 100), DefaultSnapshot(), testToken)
+	server := httptest.NewServer(bridge.Handler())
+	defer server.Close()
+
+	first := notificationEnvelope(t, "evt-http-first", "system:http-listener:dedupe", time.Now().Add(time.Minute))
+	response, receipt := postNotification(t, server.URL+"/v2/notifications", first)
+	if response.StatusCode != http.StatusAccepted || receipt.Status != state.EventAccepted {
+		t.Fatalf("first POST status=%d receipt=%+v", response.StatusCode, receipt)
+	}
+	duplicate := notificationEnvelope(t, "evt-http-second", "system:http-listener:dedupe", time.Now().Add(time.Minute))
+	response, receipt = postNotification(t, server.URL+"/v2/notifications", duplicate)
+	if response.StatusCode != http.StatusOK || receipt.Status != state.EventDuplicate || receipt.Revision != 0 {
+		t.Fatalf("duplicate POST status=%d receipt=%+v", response.StatusCode, receipt)
+	}
+	expired := notificationEnvelope(t, "evt-http-expired", "system:http-listener:expired", time.Now().Add(-time.Second))
+	response, receipt = postNotification(t, server.URL+"/v2/notifications", expired)
+	if response.StatusCode != http.StatusGone || receipt.Status != state.EventExpired || receipt.Revision != 0 {
+		t.Fatalf("expired POST status=%d receipt=%+v", response.StatusCode, receipt)
+	}
+}
+
+func TestHTTPNotificationRejectsInvalidRequests(t *testing.T) {
+	bridge := NewServerWithLimits(state.NewStore(time.Minute, 100), DefaultSnapshot(), testToken, 8, 128)
+	server := httptest.NewServer(bridge.Handler())
+	defer server.Close()
+
+	testCases := []struct {
+		name        string
+		contentType string
+		body        string
+		want        int
+	}{
+		{name: "media type", contentType: "text/plain", body: `{}`, want: http.StatusUnsupportedMediaType},
+		{name: "malformed JSON", contentType: "application/json", body: `{`, want: http.StatusBadRequest},
+		{name: "oversized", contentType: "application/json", body: strings.Repeat("x", 129), want: http.StatusRequestEntityTooLarge},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			request, err := http.NewRequest(http.MethodPost, server.URL+"/v2/notifications", strings.NewReader(testCase.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Header.Set("X-Agent-Beacon-Token", testToken)
+			request.Header.Set("Content-Type", testCase.contentType)
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response.Body.Close()
+			if response.StatusCode != testCase.want {
+				t.Fatalf("status = %d, want %d", response.StatusCode, testCase.want)
+			}
+		})
+	}
+
+	validationServer := httptest.NewServer(NewServer(state.NewStore(time.Minute, 100), DefaultSnapshot(), testToken).Handler())
+	defer validationServer.Close()
+	nonzeroRevision := notificationEnvelope(t, "evt-http-revision", "system:http-listener:revision", time.Now().Add(time.Minute))
+	nonzeroRevision.Revision = 12
+	response, _ := postNotification(t, validationServer.URL+"/v2/notifications", nonzeroRevision)
+	if response.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("nonzero revision status = %d", response.StatusCode)
+	}
+	notificationType := nonzeroRevision
+	notificationType.Revision = 0
+	notificationType.Type = protocol.TypeHeartbeat
+	response, _ = postNotification(t, validationServer.URL+"/v2/notifications", notificationType)
+	if response.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("non-notification type status = %d", response.StatusCode)
+	}
+	data, err := json.Marshal(notificationEnvelope(t, "evt-http-unknown", "system:http-listener:unknown", time.Now().Add(time.Minute)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = bytes.Replace(data, []byte(`"payload":{`), []byte(`"payload":{"unexpected":true,`), 1)
+	request, err := http.NewRequest(http.MethodPost, validationServer.URL+"/v2/notifications", bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("X-Agent-Beacon-Token", testToken)
+	request.Header.Set("Content-Type", "application/json")
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("unknown payload field status = %d", response.StatusCode)
 	}
 }
 

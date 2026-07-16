@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -47,6 +48,26 @@ func TestDecodeRejectsV1ForbiddenCategoryAndInvalidUTF8(t *testing.T) {
 		if _, err := Decode(input); err == nil {
 			t.Fatalf("expected Decode to reject %q", input)
 		}
+	}
+}
+
+func TestNotificationValidationMatchesDeviceIdentifierLimits(t *testing.T) {
+	now := time.Now()
+	notification := Notification{
+		Category: CategorySystem, Kind: "system.provider_error", Source: "test", SubjectID: "provider",
+		Theme: ThemeYellow, Urgency: UrgencyNormal, Priority: 44, DedupeKey: "system:test:provider",
+		Title: "Provider error", DisplayMS: 3000, ExpiresAt: now.Add(time.Minute),
+	}
+	if _, err := NewEnvelope("evt-ok", TypeNotification, 0, now, notification); err != nil {
+		t.Fatal(err)
+	}
+	notification.DedupeKey = strings.Repeat("x", 161)
+	if _, err := NewEnvelope("evt-long-key", TypeNotification, 0, now, notification); err == nil {
+		t.Fatal("notification with an oversized dedupe key was accepted")
+	}
+	notification.DedupeKey = "system:test:provider"
+	if _, err := NewEnvelope(strings.Repeat("x", 65), TypeNotification, 0, now, notification); err == nil {
+		t.Fatal("notification with an oversized envelope ID was accepted")
 	}
 }
 

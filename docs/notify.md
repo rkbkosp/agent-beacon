@@ -130,6 +130,7 @@ urgent     可打断 normal/attention
 v
 id
 type
+ts
 revision
 category
 kind
@@ -154,6 +155,18 @@ source_label  最多 12 个字符
 
 Mac 负责语义压缩；固件负责像素宽度截断和缺字降级。
 
+机读标识按 UTF-8 字节数限制，生产者应使用稳定的 ASCII key：
+
+```text
+id              64 bytes
+kind            64 bytes
+source          32 bytes
+subject_id      96 bytes
+dedupe_key     160 bytes
+supersede_key  128 bytes
+group_key       96 bytes
+```
+
 ### 3.3 合法值
 
 ```text
@@ -165,6 +178,141 @@ display_ms: 1500..12000
 ```
 
 `passive` 状态不发送 notification 对象，只通过 snapshot/patch 更新页面。
+
+### 3.4 Bridge 进程内投递
+
+Bridge 内部只传递 `protocol.Notification` 业务对象，不能由 Provider 自行创建
+`id`、`ts` 或 `revision`。常规 Provider 应通过 `Start` 收到的有界 channel 发送
+`providers.Update`：
+
+```go
+now := time.Now()
+notification := &protocol.Notification{
+	Category:    protocol.CategorySystem,
+	Kind:        "system.provider_error",
+	Source:      "example-provider",
+	SubjectID:   "primary",
+	Theme:       protocol.ThemeYellow,
+	Urgency:     protocol.UrgencyNormal,
+	Priority:    44,
+	DedupeKey:   "system:provider:example:stale",
+	Title:       "Example 数据过期",
+	Detail:      "等待下一次刷新",
+	SourceLabel: "Example",
+	DisplayMS:   5000,
+	ExpiresAt:   now.Add(15 * time.Minute),
+}
+
+select {
+case out <- providers.Update{Notification: notification}:
+	return nil
+case <-ctx.Done():
+	return ctx.Err()
+}
+```
+
+若一次事实变化同时更新页面状态并产生通知，应放进同一个 `Update`：
+
+```go
+providers.Update{
+	Patch:        protocol.StatePatch{System: &systemState},
+	Notification: notification,
+}
+```
+
+Bridge 会先校验并广播 patch，再校验、去重和广播 notification，保证设备收到全屏通知时
+底层持续状态已经更新。Provider 还必须遵守以下所有权规则：
+
+- `Snapshot` 只建立事实基线，不补发历史通知；
+- channel 是有界的，发送时必须同时监听 `ctx.Done()`，不得另起 goroutine 绕过背压；
+- 发出 `Update` 后不得继续修改其中的指针、slice 或 map；
+- `dedupe_key` 表示业务事实，不能使用当前时间或随机数逃避去重；
+- `expires_at` 必须按事件价值设置，不能用零值或无限 TTL；
+- Provider 不得直接操作 store、WebSocket hub 或固件队列。
+
+已经持有 `*api.Server` 且不属于 Provider 生命周期的同进程组件，可以直接调用：
+
+```go
+receipt, err := bridge.PublishNotification(*notification)
+```
+
+该方法负责生成 envelope 元数据，并返回 `accepted`、`deduplicated` 或 `expired`。
+只有 `accepted` 会分配连续 revision、写入事件历史并广播。调用成功只表示 Bridge 已接收，
+设备是否显示仍以设备 ACK 为准。
+
+### 3.5 HTTP 通知监听入口
+
+进程外生产者使用 Bridge 已有 HTTP 服务，不单独启动第二个端口：
+
+```text
+POST http://<bridge-host>:8787/v2/notifications
+```
+
+请求必须携带 `X-Agent-Beacon-Token` 和 `Content-Type: application/json`，body 是完整的
+v2 notification envelope。生产者负责 `id` 和 `ts`；请求 `revision` 必须为 `0`，成功
+接收后由 Bridge 改写为全局连续 revision。`payload` 与本节定义的进程内对象完全相同。
+
+macOS 上可直接发送：
+
+```bash
+EVENT_ID="evt-http-$(date +%s)"
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+EXPIRES="$(date -u -v+5M +%Y-%m-%dT%H:%M:%SZ)"
+TOKEN="$(cat "$HOME/Library/Application Support/AgentBeacon/token")"
+
+curl -sS -X POST 'http://127.0.0.1:8787/v2/notifications' \
+  -H "X-Agent-Beacon-Token: $TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data-binary @- <<JSON
+{
+  "v": 2,
+  "id": "$EVENT_ID",
+  "type": "notification",
+  "ts": "$NOW",
+  "revision": 0,
+  "payload": {
+    "category": "system",
+    "kind": "system.provider_error",
+    "source": "build-monitor",
+    "subject_id": "agent-beacon",
+    "theme": "yellow",
+    "urgency": "normal",
+    "priority": 44,
+    "dedupe_key": "system:build-monitor:agent-beacon:failed",
+    "title": "构建需要关注",
+    "detail": "agent-beacon · 测试失败",
+    "source_label": "Build",
+    "display_ms": 5000,
+    "expires_at": "$EXPIRES",
+    "sticky_badge": false,
+    "replay_after_interrupt": false,
+    "max_replays": 0
+  }
+}
+JSON
+```
+
+首次接收返回 `202 Accepted`：
+
+```json
+{"status":"accepted","event_id":"evt-http-1784170800","revision":302}
+```
+
+| HTTP 状态 | `status` / 含义 |
+|---:|---|
+| `202` | `accepted`：已写入历史，并广播给当前已完成 hello 的设备 |
+| `200` | `deduplicated`：`id` 或 `dedupe_key` 已在去重窗口内处理，不会重播 |
+| `410` | `expired`：`expires_at` 已到，不写入、不广播 |
+| `400` | JSON、UTF-8、envelope 或 payload 不合法，包含未知字段时也会拒绝 |
+| `401` | Token 缺失或不匹配 |
+| `413` | body 超过 `server.max_request_bytes` |
+| `415` | `Content-Type` 不是 `application/json` |
+| `422` | envelope 不是 notification，或请求 revision 不为 `0` |
+
+相同请求可以安全重试；应复用原 `id` 和 `dedupe_key`，不要为重试生成新的业务键。
+`accepted` 不等于 `shown`：当时没有 ready 设备时，事件仍会进入 Bridge 内存历史，但
+当前版本不会在设备稍后连接时补播；实际展示结果通过 `shown` / `completed` ACK 查询。
+HTTP 与 WebSocket 当前都是明文传输，只允许在可信本机或受信任局域网使用。
 
 ---
 
@@ -831,6 +979,17 @@ storage_task
 6. revision gap 后请求 snapshot；
 7. 已过期通知返回 expired；
 8. 连续 1000 条通知无内存泄漏。
+
+### 15.5 Bridge 接入
+
+1. 进程内合法 notification 取得 accepted receipt，并广播一次；
+2. 同一 `dedupe_key` 经进程内和 HTTP 两个入口仍只接收一次；
+3. HTTP 缺少或使用错误 Token 时返回 401；
+4. HTTP 未知字段、错误 enum、非 notification envelope 和非零 revision 均被拒绝；
+5. HTTP body 超限返回 413，且事件历史和 revision 不变化；
+6. 已过期 HTTP 通知返回 410，不广播；
+7. ready 设备收到的 envelope 保留生产者 ID，并使用 Bridge 新分配的 revision；
+8. 没有 ready 设备时 accepted 不伪造 shown/completed ACK。
 
 ---
 

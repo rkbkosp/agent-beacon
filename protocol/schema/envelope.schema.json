@@ -7,7 +7,7 @@
   "required": ["v", "id", "type", "ts", "revision", "payload"],
   "properties": {
     "v": { "const": 2 },
-    "id": { "type": "string", "minLength": 1, "maxLength": 48 },
+    "id": { "type": "string", "minLength": 1, "maxLength": 64 },
     "type": {
       "enum": [
         "hello", "snapshot", "state_patch", "notification", "heartbeat", "error",

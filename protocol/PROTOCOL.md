@@ -17,6 +17,13 @@ X-Agent-Beacon-Protocol: 2
 `state_patch`、`notification` 和 heartbeat；revision gap 由设备发送
 `get_snapshot` 恢复。
 
+进程外通知生产者通过
+`POST http://<bridge-host>:8787/v2/notifications` 投递完整 v2 notification envelope，
+并携带 `X-Agent-Beacon-Token` 与 `Content-Type: application/json`。请求 revision 固定为
+`0`；Bridge 完成校验、TTL 和去重后分配连续 revision，再通过设备 Hub 广播。
+进程内 Provider 的 channel 用法、HTTP 示例和响应语义见
+[`docs/notify.md`](../docs/notify.md#34-bridge-进程内投递)。
+
 Snapshot 只包含 `clock`、`codex`、`agents`、`weather`、`system`；实时全局 Token
 速度位于 `codex.token_rate`，不新增顶层 domain。`agents.codex_active` 由 Herdr
 会话状态派生：仅当至少一个 Codex session 为 `working` 时为 `true`，断连时为
