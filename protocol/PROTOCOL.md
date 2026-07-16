@@ -1,7 +1,9 @@
 # Agent Beacon Protocol v2
 
-协议权威约束见 [`docs/ui.md`](../docs/ui.md) 和
-[`docs/notify.md`](../docs/notify.md)。本目录保存可执行的 JSON Schema 与示例。
+协议权威约束见 [`docs/ui.md`](../docs/ui.md)、
+[`docs/notify.md`](../docs/notify.md) 和
+[`docs/token-rate-api.md`](../docs/token-rate-api.md)。本目录保存可执行的 JSON Schema
+与示例。
 
 WebSocket 地址为 `ws://<bridge-host>:8787/v2/ws`。握手必须携带：
 
