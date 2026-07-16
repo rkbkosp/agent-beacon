@@ -1,13 +1,16 @@
 # Agent Beacon
 
 Agent Beacon 将 Waveshare ESP32-S3-LCD-1.47B 用作本地桌面状态终端。当前第一轮
-只实现三个轮播页：Codex 两个 Home 的一周额度与重置卡、Herdr Agent 状态、
-午饭/下班天气；状态变化通过蓝、黄、红、绿全屏通知展示。
+实现 Codex 全局实时 Token 速度与两个 Home 的一周额度、Herdr Agent 状态、
+午饭/下班天气；状态变化通过蓝、黄、红、绿全屏通知展示。Agents 与天气页始终
+轮播；只有 Herdr 存在 `working` 的 Codex session 时，速度仪表盘才会立即出现并
+以 15 秒时长加入轮播。
 
 通知、界面和天气的实现分别以 `docs/notify.md`、`docs/ui.md` 和
 `docs/weather.md` 为准；本文负责用户操作说明。日常运行默认关闭 Mock，
-Codex 通过各自 `CODEX_HOME` 的 Codex app-server 读取真实一周额度和重置卡，
-0-0 余额从真实 API 读取，Agents 使用 Herdr socket，天气使用 QWeather。
+Codex 配额通过各自 `CODEX_HOME` 的 app-server 读取；全局 Token 速度消费 patched
+Codex daemon 的本地聚合状态文件；0-0 余额从真实 API 读取，Agents 使用 Herdr
+socket，天气使用 QWeather。
 
 ## 环境
 
@@ -71,7 +74,8 @@ make test
 make firmware-build
 make bridge-build
 
-# 临时前台运行
+# 临时前台运行（两个终端）
+make token-rate-run
 make bridge-run
 
 # 终端 2
@@ -86,12 +90,27 @@ make firmware-monitor PORT=/dev/cu.usbmodemXXXX
 `blocked > done > working > idle > unknown` 排序，只在 LCD 显示前四项；同一
 workspace 有多个 tab 时显示为 `workspace · tab`。命名 session 或自定义 socket
 可在 `macos/configs/config.example.yaml` 的 `providers.herdr` 中配置。
+Bridge 还会下发 `agents.codex_active`：只要任意 Codex session 为 `working`，设备
+就立即切到速度仪表盘；没有活跃 Codex session 或 Herdr 断连时，该页不参与轮播。
 
-## Codex 与 0-0 余额
+## Codex Token 速度、配额与 0-0 余额
 
 `providers.codex.homes` 为每套帐号分别设置 `CODEX_HOME`。内置
 `codex-adapter` 子命令通过当前 Codex CLI 的 `account/rateLimits/read` 读取
 7 天窗口和重置卡；它只输出周额度，不下发或保留 5 小时窗口。
+
+Token 速度依赖 `rust-v0.144.4` patched Codex 的 `codex-token-rate-daemon`。指标固定为
+所有连接同一 socket 的本机 patched Codex 进程之
+`visible_output_tokens_per_second`：只统计用户可见助手文本，使用 daemon 已聚合的
+2 秒窗口 EMA，不包含输入、reasoning、工具参数或工具输出。daemon 状态文件必须为
+0600；Bridge 每 200ms 读取一次，只在可见值变化时下发，2 秒没有新状态即显示过期。
+
+前台调试时，先运行 `make token-rate-run`，再从另一个终端启动 patched Codex：
+
+```bash
+export CODEX_TOKEN_RATE_SOCKET="$HOME/Library/Application Support/AgentBeacon/codex-token-rate.sock"
+~/.local/bin/codex-patched
+```
 
 0-0 API Key 存在 macOS 登录 Keychain，不写 YAML 或 plist：
 
@@ -108,12 +127,19 @@ cd macos
 ```bash
 make bridge-service-install
 make bridge-service-status
+make token-rate-service-status
 ```
+
+当 `providers.codex.token_rate.enabled: true` 时，安装命令还会从
+`~/.local/bin/codex-token-rate-daemon` 安装并启动 companion LaunchAgent，并向当前
+GUI bootstrap domain 设置 `CODEX_TOKEN_RATE_SOCKET`。已经运行的 patched Codex 不会
+追溯继承新环境变量，需重启；终端进程仍可按上节显式 `export`。
 
 安装命令会把二进制、配置和设备 token 安装到
 `~/Library/Application Support/AgentBeacon/`，生成并加载
-`~/Library/LaunchAgents/com.stepatero.agentbeacon.plist`，然后等待 `/readyz`
-通过。服务日志位于 `~/Library/Logs/AgentBeacon/`。
+`com.stepatero.agentbeacon.plist` 和 `com.stepatero.agentbeacon.tokenrate.plist`，先等待
+daemon 状态文件出现，再等待 Bridge `/readyz` 通过。服务日志位于
+`~/Library/Logs/AgentBeacon/`。
 
 ```bash
 make bridge-service-restart

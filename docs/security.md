@@ -21,6 +21,12 @@ location, outing slot/target, fetch/update times, and QWeather/Open-Meteo
 upstream weather payloads. Run
 `agent-beacon-bridge weather cache clear --config <path>` to delete it.
 
+The Codex token-rate socket and state file contain only aggregate counts and
+timestamps. The companion daemon creates both with mode `0600`; the Bridge
+rejects a non-regular or group/world-accessible state file. Prompt text, visible
+output, reasoning, tool content, credentials, and working directories never
+enter this path.
+
 ## Device Data Boundary
 
 The MVP device receives short status labels and notification summaries. It does

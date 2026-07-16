@@ -3,9 +3,9 @@
 ## Runtime Data Flow
 
 ```text
-Codex app-server       0-0 API / Keychain       Herdr socket       QWeather
-        |                      |                     |                  |
-        +----------------------+----------+----------+------------------+
+Codex app-server   Token-rate state   0-0 API / Keychain   Herdr socket   QWeather
+        |                  |                  |                  |          |
+        +------------------+------------------+--------+---------+----------+
                                           v
 Go protocol validation -> in-memory dedupe/revision store -> WebSocket Hub
                                                             |
@@ -46,16 +46,21 @@ revision gaps.
 
 The Codex section coordinator executes the normalized adapter once per
 `CODEX_HOME`, reads only the seven-day rate-limit window and reset-card summary,
-and combines both homes with the independently refreshed 0-0 balance so one
-upstream can never overwrite the other half of the Codex page. The relay secret
-is read from macOS Keychain for each request and is never included in device
-payloads or logs.
+and combines both homes with the independently refreshed 0-0 balance and the
+patched Codex daemon's global visible-output rate. The rate state is polled at
+200 ms, validated against the daemon v1 metric contract and 0600 file mode, and
+published only when the displayed rate/activity/freshness changes. A missing or
+stopped daemon becomes stale after two seconds. The relay secret is read from
+macOS Keychain for each request and is never included in device payloads or logs.
 
 The Herdr provider connects directly to the configured NDJSON Unix socket. It
 bootstraps with `session.snapshot`, subscribes to pane/agent/workspace/tab
 events, resyncs immediately after an event, and performs a full resync every 60
-seconds. Agent rows use Herdr's public five-state model and priority order; the
-firmware independently applies the same ordering before retaining four rows.
+seconds. It also derives `agents.codex_active` from the real session identity
+(`agent_session` first, top-level `agent` as fallback) and `working` status; a
+disconnect forces the field false. Agent rows use Herdr's public five-state
+model and priority order; the firmware independently applies the same ordering
+before retaining four rows.
 
 Bridge state is currently in memory. The bridge token is loaded from a 0600
 token file or environment variable and is required for every v2 HTTP and

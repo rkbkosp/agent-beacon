@@ -94,8 +94,9 @@ M0 result: passed.
 
 ### Automated Tests
 
-The host suite covers the 8/6/8-second carousel timing, interrupted-page
-restoration, elapsed time across state boundaries, BOOT debounce and
+The host suite covers the dynamic 15/6/8-second carousel timing, two-page
+rotation while Codex is inactive, interrupted-page restoration, elapsed time
+across state boundaries, BOOT debounce and
 short/double/2-second/5-second gestures, the Codex/Agents/Weather models, theme
 palettes, and native-panel geometry.
 
@@ -422,3 +423,72 @@ stderr                                                empty
 
 This completes M3 provider wiring and the launchd/autostart slice of M6. The
 M6 SoftAP and 24-hour soak requirements remain separate acceptance work.
+
+## 2026-07-15 Global Token-Rate Dashboard
+
+The Codex carousel page now renders a 240-degree LVGL speedometer for the global
+patched-Codex `visible_output_tokens_per_second` EMA. Two compact weekly-quota
+fuel rows and the 0-0 balance remain on the right. The protocol distinguishes a
+valid idle `0.0` from unavailable/stale data, which renders as `--`.
+
+Automated and build verification:
+
+```text
+make test                                             PASS
+go test ./...                                         PASS
+protocol/schema example validation                   PASS
+token-rate 0600/contract/freshness tests              PASS
+idf.py build                                          PASS
+agent_beacon.bin                                      0x4abd90 bytes
+application partition free                           42%
+```
+
+`bridge-service-install` installed both the Bridge and the copied patched
+`codex-token-rate-daemon` as `RunAtLoad`/`KeepAlive` LaunchAgents. Live state:
+
+```text
+com.stepatero.agentbeacon.tokenrate                   running
+codex-token-rate.sock                                 mode 0600
+codex-token-rate.json                                 mode 0600
+idle Bridge snapshot                                 fresh 0.0 tok/s
+synthetic local delta Bridge snapshot                 fresh 14.0 tok/s, 1 session, 1 stream
+post-window Bridge snapshot                           fresh 0.0 tok/s
+```
+
+The rebuilt firmware passed esptool hash verification on
+`/dev/cu.usbmodem21201`, initialized LVGL and both Milan fonts, joined Wi-Fi,
+connected WebSocket, and applied the real snapshot at revision 18. A second
+synthetic rate burst produced live Codex/System patches through revision 29
+without a panic or reset. Physical LCD inspection of exact needle geometry,
+spacing, and clipping remains a human visual acceptance step.
+
+## 2026-07-15 Herdr-Gated Token Dashboard Carousel
+
+The Herdr provider now publishes `agents.codex_active=true` only when at least
+one session identified as Codex is `working`. Session metadata is preferred,
+the top-level Herdr agent label is the compatibility fallback, and a provider
+disconnect forces the field false. Firmware uses the transition as a carousel
+control signal: activation immediately selects the speed dashboard for 15
+seconds, while deactivation removes it without interrupting an already visible
+Agents or Weather page.
+
+Automated verification covers any-one-active aggregation, non-Codex working
+sessions, inactive Codex states, disconnected state, idempotent active patches,
+the 15-second boundary, filtered automatic/manual navigation, deactivation on
+and away from the Codex page, notification restoration, and diagnostics.
+
+```text
+make test                                             PASS
+go vet ./...                                          PASS
+go test -race ./...                                   PASS
+idf.py build                                          PASS
+agent_beacon.bin                                      0x4abf10 bytes
+application partition free                           42%
+```
+
+The installed production Bridge reported a real Herdr snapshot with
+`codex_active=true` and a `working` Codex session named `agent-bacon`. The
+rebuilt image passed the factory-backup guard and esptool hash verification on
+`/dev/cu.usbmodem21201`; after boot it connected to the production WebSocket and
+accepted the full snapshot at revision 4, then patches through revision 6,
+without a panic or reset.

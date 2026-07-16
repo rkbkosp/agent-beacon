@@ -1,7 +1,7 @@
 # Agent Beacon UI 与数据视图规格（ui.md）
 
 > 本文是 `320 × 172` 横屏 UI、页面数据模型和数据源适配的唯一权威规格。
-> 第一阶段只实现：**Codex 配额、Herdr Agent 状态、天气、全屏通知、诊断页**。
+> 第一阶段只实现：**Codex 全局 Token 速度与配额、Herdr Agent 状态、天气、全屏通知、诊断页**。
 > 当前明确不实现：任务、邮件、聊天消息、评测页面及其 Provider。
 
 ---
@@ -10,7 +10,7 @@
 
 ### 1.1 页面列表
 
-普通轮播只包含三页：
+普通轮播有三种页面，其中 Agents、Weather 始终参与，Codex 按活跃状态动态参与：
 
 ```text
 PAGE_CODEX
@@ -29,11 +29,17 @@ PAGE_DIAGNOSTICS       手动进入的诊断页
 
 | 页面 | 默认停留 |
 |---|---:|
-| Codex | 8 秒 |
+| Codex | 15 秒，仅 `agents.codex_active=true` 时参与 |
 | Agents | 6 秒 |
 | Weather | 8 秒 |
 
 通知出现时暂停轮播；通知结束后恢复原页面以及原页面剩余停留时间。
+
+Herdr 首次报告任意 Codex session 从非活跃变为 `working` 时，立即切换到 Codex
+速度仪表盘并开始完整 15 秒倒计时；保持 `working` 的后续 snapshot/patch 不得重复
+续时。所有 Codex session 都不再是 `working` 或 Herdr 断连时，Codex 页退出轮播；
+若当时正显示 Codex 页则立即切到 Agents，否则不打断当前 Agents/Weather 页。
+全屏通知和手动诊断页保持更高显示优先级，此时只更新退出后的目标页面。
 
 ### 1.2 全局区域
 
@@ -80,9 +86,9 @@ PAGE_DIAGNOSTICS       手动进入的诊断页
 
 同一页同时显示：
 
-1. 两个独立 `CODEX_HOME` 的一周配额；
-2. 每个 `CODEX_HOME` 的重置卡张数；
-3. 每个 `CODEX_HOME` 最近一张重置卡的过期时间；
+1. 所有本机 patched Codex 进程的实时全局可见输出 Token 速度；
+2. 两个独立 `CODEX_HOME` 的一周配额；
+3. 每个 `CODEX_HOME` 的重置卡张数和最近过期时间；
 4. `0-0.pro` 中转站余额。
 
 Codex 当前产品要求中不再显示 5 小时滑动窗口。代码、协议、Mock 和 UI 中均不得保留 `five_hour`、`rolling_5h`、`primary_window` 等字段。
@@ -107,6 +113,12 @@ providers:
       command:
         - "@bridge"
         - codex-adapter
+    token_rate:
+      enabled: true
+      socket_path: "~/Library/Application Support/AgentBeacon/codex-token-rate.sock"
+      state_file: "~/Library/Application Support/AgentBeacon/codex-token-rate.json"
+      refresh_interval: 200ms
+      stale_after: 2s
 ```
 
 要求：
@@ -118,6 +130,9 @@ providers:
 - 一个 Home 失败不得清空另一个 Home；
 - Mac 服务调用 adapter 时必须设置对应的 `CODEX_HOME` 环境变量；
 - 不允许把两个 Home 的 session、账号或额度混合统计。
+
+Token 速度与 Home 无关，只允许使用 daemon 已聚合的全局指标；Bridge 不得把两个
+Home 的周配额相加、换算成速度，或自行扫描进程推算速度。
 
 ### 2.3 Codex adapter 输出
 
@@ -149,7 +164,46 @@ providers:
 - adapter 不得输出 5 小时窗口字段；
 - adapter stdout 只允许一个 JSON 对象，stderr 用于诊断日志。
 
-### 2.4 中转站余额 Provider
+### 2.4 实时 Token 速度 Provider
+
+事实源是 `rust-v0.144.4` patched Codex 配套的 `codex-token-rate-daemon` 状态文件。
+指标名称必须精确为：
+
+```text
+visible_output_tokens_per_second
+```
+
+该指标是所有连接同一 Unix Datagram socket 的本机 patched Codex 进程之用户可见
+助手文本近似输出速率。它不包含 input token、hidden reasoning、工具参数、工具输出、
+认证信息或工作目录。daemon 以本地接收时间维护 2 秒滑动窗口并输出 EMA；Bridge
+不得对它再次平滑或按 Home 拆分。
+
+daemon v1 状态文件示例：
+
+```json
+{
+  "version": 1,
+  "metric": "visible_output_tokens_per_second",
+  "estimated": true,
+  "tokens_per_second": 42.7,
+  "raw_tokens_per_second": 48.0,
+  "active_sessions": 2,
+  "active_streams": 3,
+  "window_ms": 2000,
+  "updated_at_unix_ms": 1784082660000
+}
+```
+
+Bridge 规则：
+
+1. 状态文件必须是普通文件，权限不得宽于 `0600`；
+2. 严格校验 version、metric、estimated、非负有限速率、活动计数和时间戳；
+3. 默认每 200ms 读取，只有速度、活动计数或 freshness 的可见值变化才下发；
+4. 短暂读失败保留上次值并标记 `cached`，超过 2 秒后清空数值并标记 `stale`；
+5. daemon 正常运行但没有活跃输出时，`0.0` 是真实值，不得显示成“无数据”；
+6. daemon 未启动或状态过期时显示 `--`，不得把缺失数据伪装成 `0.0`。
+
+### 2.5 中转站余额 Provider
 
 接口：
 
@@ -205,36 +259,48 @@ agent-beacon-bridge secret set zero-api-key --from-env ZERO_API_KEY
 
 不要依赖交互式 shell 环境变量自动传入 LaunchAgent。
 
-### 2.5 Codex 页面布局
+### 2.6 Codex 页面布局
 
 ```text
-┌──────────────────────────────┐
-│ CODEX                   14:42│
-│ MAIN      18%   ↻ 三 11:39   │
-│ ██░░░░░░  卡 2 · 最近 07/20  │
-│ VS        64%   ↻ 六 09:00   │
-│ █████░░░  卡 1 · 最近 07/18  │
-│ 0-0 中转站              $14.16│
-└──────────────────────────────┘
+┌──────────────────────────────────┐
+│ TOKEN 速度                ● 在线 │
+│       0   60       │ 油量·周配额 │
+│    ╭────────╮      │ MAIN    18% │
+│  240  42.7  120    │ ██░░░░░░░░  │
+│    ╰──╱─────╯      │ 重07/15 卡2 │
+│   估算 tok/s       │ VS      64% │
+│ 2 会话 · 3 流      │ ██████░░░░  │
+│                    │ 0-0   $14.16│
+└──────────────────────────────────┘
 ```
 
 具体网格：
 
 ```text
-Header                  y=0..21
-Home A row              y=24..72
-Home B row              y=74..122
-Relay balance footer    y=126..153
-Freshness footer        y=154..171
+Header                  y=0..22
+Token meter (left)      x=9..159, y=24..170
+Vertical divider        x=169, y=29..164
+Quota title (right)     x=178..312, y=27..44
+Home A fuel row         x=178..312, y=43..89
+Home B fuel row         x=178..312, y=91..137
+Relay balance footer    x=176..312, y=141..165
 ```
 
-每个 Home 行：
+左侧速度表：
+
+- 0～240 的 240 度汽车仪表盘刻度、进度弧与指针；
+- 中央大号数字显示实际 `tokens_per_second`，保留一位小数；超过 240 时指针封顶，
+  数字仍显示真实值；
+- 下方显示 `估算 tok/s` 与活动会话/stream 数；
+- `cached` 使用黄色，`stale/unknown` 使用灰色并显示 `--` 和文字原因；
+- 颜色只表达 freshness，不把高 Token 速度误标成危险状态。
+
+右侧每个 Home 行：
 
 - 左上：Home label；
 - 中上：一周剩余百分比，大号数字；
-- 右上：一周重置时间；
-- 左下：进度条；
-- 右下：`卡 N · 最近 MM/DD`；
+- 下方：进度条；
+- 最下方左侧：一周重置日期；右侧：`卡 N · MM/DD`；
 - Home stale 时整行降低饱和度并显示 `!`，但保留上次值。
 
 进度条颜色：
@@ -265,7 +331,7 @@ stale    灰色斜线或感叹号
 - 已过期但卡数仍大于 0：显示红色 `数据异常`，不得静默修正；
 - 卡数为 0：显示 `卡 0 · —`。
 
-### 2.6 Codex 页面协议
+### 2.7 Codex 页面协议
 
 ```json
 {
@@ -298,12 +364,21 @@ stale    灰色斜线或感叹号
       "is_valid": true,
       "updated_at": "2026-07-14T14:30:00+08:00",
       "freshness": "fresh"
+    },
+    "token_rate": {
+      "tokens_per_second": 42.7,
+      "active_sessions": 2,
+      "active_streams": 3,
+      "window_ms": 2000,
+      "estimated": true,
+      "updated_at": "2026-07-14T14:31:00+08:00",
+      "freshness": "fresh"
     }
   }
 }
 ```
 
-固件最多渲染两个 Home；收到三个及以上视为协议错误并只取前两个，同时上报诊断 ACK。
+固件最多渲染两个 Home；收到三个及以上视为协议错误并拒绝该条消息。
 
 ---
 
@@ -394,6 +469,7 @@ providers:
   "agents": {
     "provider": "herdr",
     "connected": true,
+    "codex_active": false,
     "updated_at": "2026-07-14T14:31:00+08:00",
     "items": [
       {
@@ -418,6 +494,11 @@ providers:
   }
 }
 ```
+
+`codex_active` 由 Mac Bridge 统一派生，固件不从显示名猜测：Herdr 连接正常，且
+至少一个 `status=working` 的会话通过 `agent_session.source=herdr:codex`、
+`agent_session.agent=codex` 或顶层 `agent=codex` 识别为 Codex 时才为 `true`。
+`blocked / done / idle / unknown` 均不算活跃；Herdr 断连时强制为 `false`。
 
 字段优先级：
 
