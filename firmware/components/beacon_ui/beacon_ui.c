@@ -44,6 +44,8 @@ static const uint32_t COLOR_YELLOW = 0xf5c842;
 static const uint32_t COLOR_RED = 0xe5484d;
 static const uint32_t COLOR_GREEN = 0x30a46c;
 
+#define TOKEN_RATE_GAUGE_MAX 240
+
 static void tick_callback(void *argument)
 {
     (void)argument;
@@ -152,20 +154,105 @@ static uint32_t quota_color(const beacon_codex_home_t *home)
     return COLOR_BLUE;
 }
 
-static void create_codex_home(const beacon_codex_home_t *home, lv_coord_t y)
+static int32_t token_rate_gauge_value(const beacon_token_rate_state_t *rate)
 {
+    if (!rate->available || rate->tokens_per_second <= 0.0f) {
+        return 0;
+    }
+    if (rate->tokens_per_second >= TOKEN_RATE_GAUGE_MAX) {
+        return TOKEN_RATE_GAUGE_MAX;
+    }
+    return (int32_t)(rate->tokens_per_second + 0.5f);
+}
+
+static uint32_t token_rate_color(const beacon_token_rate_state_t *rate)
+{
+    if (!rate->available || rate->freshness == BEACON_FRESHNESS_STALE ||
+        rate->freshness == BEACON_FRESHNESS_UNKNOWN) {
+        return COLOR_MUTED;
+    }
+    if (rate->freshness == BEACON_FRESHNESS_CACHED) {
+        return COLOR_YELLOW;
+    }
+    return COLOR_BLUE;
+}
+
+static void create_token_rate_meter(const beacon_token_rate_state_t *rate)
+{
+    const uint32_t color = token_rate_color(rate);
+    const int32_t gauge_value = token_rate_gauge_value(rate);
+    lv_obj_t *meter = lv_meter_create(screen);
+    lv_obj_set_pos(meter, 9, 24);
+    lv_obj_set_size(meter, 150, 146);
+    lv_obj_clear_flag(meter, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_opa(meter, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(meter, 0, 0);
+    lv_obj_set_style_pad_all(meter, 10, 0);
+    lv_obj_set_style_text_font(meter, FONT_BODY_14, LV_PART_TICKS);
+    lv_obj_set_style_text_color(meter, lv_color_hex(COLOR_MUTED), LV_PART_TICKS);
+
+    lv_meter_scale_t *scale = lv_meter_add_scale(meter);
+    lv_meter_set_scale_ticks(meter, scale, 13, 1, 5, lv_color_hex(COLOR_MUTED));
+    lv_meter_set_scale_major_ticks(meter, scale, 3, 2, 8,
+                                   lv_color_hex(COLOR_FOREGROUND), 3);
+    lv_meter_set_scale_range(meter, scale, 0, TOKEN_RATE_GAUGE_MAX, 240, 150);
+
+    lv_meter_indicator_t *progress = lv_meter_add_arc(
+        meter, scale, 3, lv_color_hex(color), 0);
+    lv_meter_set_indicator_start_value(meter, progress, 0);
+    lv_meter_set_indicator_end_value(meter, progress, gauge_value);
+    lv_meter_indicator_t *needle = lv_meter_add_needle_line(
+        meter, scale, 3, lv_color_hex(color), -12);
+    lv_meter_set_indicator_value(meter, needle, gauge_value);
+
     char value[24];
-    set_text(create_label(8, y, 64, 18, FONT_HEADING_14, LV_TEXT_ALIGN_LEFT,
-                          COLOR_FOREGROUND), home->label);
+    if (!rate->available) {
+        lv_snprintf(value, sizeof(value), "--");
+    } else if (rate->tokens_per_second < 1000.0f) {
+        lv_snprintf(value, sizeof(value), "%.1f", (double)rate->tokens_per_second);
+    } else {
+        lv_snprintf(value, sizeof(value), "%.0f", (double)rate->tokens_per_second);
+    }
+    set_text(create_label(29, 75, 110, 29, FONT_HEADING_24, LV_TEXT_ALIGN_CENTER,
+                          color), value);
+    set_text(create_label(34, 103, 100, 18, FONT_BODY_14, LV_TEXT_ALIGN_CENTER,
+                          COLOR_MUTED), "估算 tok/s");
+
+    char activity[32];
+    if (rate->freshness == BEACON_FRESHNESS_STALE) {
+        lv_snprintf(activity, sizeof(activity), "速度数据已过期");
+    } else if (!rate->available) {
+        lv_snprintf(activity, sizeof(activity), "等待速度数据");
+    } else {
+        lv_snprintf(activity, sizeof(activity), "%u 会话 · %u 流",
+                    (unsigned)rate->active_sessions, (unsigned)rate->active_streams);
+    }
+    set_text(create_label(16, 139, 136, 18, FONT_BODY_14, LV_TEXT_ALIGN_CENTER,
+                          COLOR_MUTED), activity);
+}
+
+static void create_codex_fuel(const beacon_codex_home_t *home, lv_coord_t y)
+{
+    char label[16];
+    char value[24];
+    char reset[16];
+    char cards[24];
+    if (home->freshness == BEACON_FRESHNESS_STALE) {
+        lv_snprintf(label, sizeof(label), "%s !", home->label);
+    } else {
+        lv_snprintf(label, sizeof(label), "%s", home->label);
+    }
+    set_text(create_label(178, y, 56, 18, FONT_HEADING_14, LV_TEXT_ALIGN_LEFT,
+                          home->freshness == BEACON_FRESHNESS_STALE ? COLOR_MUTED
+                                                                   : COLOR_FOREGROUND),
+             label);
     lv_snprintf(value, sizeof(value), "%u%%", home->weekly_remaining_percent);
-    set_text(create_label(70, y - 3, 60, 25, FONT_HEADING_24, LV_TEXT_ALIGN_LEFT,
+    set_text(create_label(234, y - 4, 78, 25, FONT_HEADING_24, LV_TEXT_ALIGN_RIGHT,
                           quota_color(home)), value);
-    set_text(create_label(158, y, 154, 18, FONT_BODY_14, LV_TEXT_ALIGN_RIGHT,
-                          COLOR_MUTED), home->weekly_reset);
 
     lv_obj_t *bar = lv_bar_create(screen);
-    lv_obj_set_pos(bar, 8, y + 25);
-    lv_obj_set_size(bar, 142, 7);
+    lv_obj_set_pos(bar, 178, y + 22);
+    lv_obj_set_size(bar, 134, 6);
     lv_bar_set_range(bar, 0, 100);
     lv_bar_set_value(bar, home->weekly_remaining_percent, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(bar, lv_color_hex(COLOR_SUBTLE), LV_PART_MAIN);
@@ -173,27 +260,40 @@ static void create_codex_home(const beacon_codex_home_t *home, lv_coord_t y)
     lv_obj_set_style_bg_color(bar, lv_color_hex(quota_color(home)), LV_PART_INDICATOR);
     lv_obj_set_style_radius(bar, 2, LV_PART_MAIN | LV_PART_INDICATOR);
 
-    if (home->reset_cards_available < 0) {
-        lv_snprintf(value, sizeof(value), "重置卡 - | -");
+    if (strcmp(home->weekly_reset, "-") == 0) {
+        lv_snprintf(reset, sizeof(reset), "重 -");
     } else {
-        lv_snprintf(value, sizeof(value), "重置卡 %d | %s", home->reset_cards_available,
+        lv_snprintf(reset, sizeof(reset), "重 %.5s", home->weekly_reset);
+    }
+    if (home->reset_cards_available < 0) {
+        lv_snprintf(cards, sizeof(cards), "卡 -");
+    } else if (strcmp(home->nearest_card_expiry, "-") == 0) {
+        lv_snprintf(cards, sizeof(cards), "卡%d · -", home->reset_cards_available);
+    } else {
+        lv_snprintf(cards, sizeof(cards), "卡%d · %.5s", home->reset_cards_available,
                     home->nearest_card_expiry);
     }
-    set_text(create_label(158, y + 20, 154, 18, FONT_BODY_14, LV_TEXT_ALIGN_RIGHT,
-                          COLOR_MUTED), value);
+    set_text(create_label(178, y + 30, 58, 16, FONT_BODY_14, LV_TEXT_ALIGN_LEFT,
+                          COLOR_MUTED), reset);
+    set_text(create_label(236, y + 30, 76, 16, FONT_BODY_14, LV_TEXT_ALIGN_RIGHT,
+                          COLOR_MUTED), cards);
 }
 
 static void show_codex_page(void)
 {
     begin_screen(COLOR_BACKGROUND);
-    create_header("CODEX 配额", connection_suffix());
+    create_header("TOKEN 速度", connection_suffix());
+    create_token_rate_meter(&app_state.codex.token_rate);
+    create_box(169, 29, 1, 135, COLOR_SUBTLE);
+    set_text(create_label(178, 27, 134, 18, FONT_BODY_14, LV_TEXT_ALIGN_LEFT,
+                          COLOR_MUTED), "油量 · 周配额");
     for (size_t index = 0; index < app_state.codex.home_count && index < 2; ++index) {
-        create_codex_home(&app_state.codex.homes[index], index == 0 ? 29 : 78);
+        create_codex_fuel(&app_state.codex.homes[index], index == 0 ? 43 : 91);
     }
-    create_box(8, 128, 304, 36, COLOR_SUBTLE);
-    set_text(create_label(16, 137, 150, 18, FONT_BODY_14, LV_TEXT_ALIGN_LEFT,
-                          COLOR_MUTED), "0-0 中转");
-    set_text(create_label(172, 133, 132, 24, FONT_HEADING_18, LV_TEXT_ALIGN_RIGHT,
+    create_box(176, 141, 136, 24, COLOR_SUBTLE);
+    set_text(create_label(182, 144, 44, 18, FONT_BODY_14, LV_TEXT_ALIGN_LEFT,
+                          COLOR_MUTED), "0-0");
+    set_text(create_label(226, 142, 80, 22, FONT_HEADING_18, LV_TEXT_ALIGN_RIGHT,
                           app_state.codex.relay.is_valid ? COLOR_FOREGROUND : COLOR_YELLOW),
              app_state.codex.relay.display);
 }

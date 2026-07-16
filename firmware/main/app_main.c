@@ -121,19 +121,24 @@ static void refresh_on_transport_change(const beacon_ui_state_t *ui_state)
 }
 
 static void apply_protocol_state(const beacon_protocol_message_t *message,
-                                 const beacon_ui_state_t *ui_state)
+                                 beacon_ui_state_t *ui_state)
 {
     const bool system_status_changed =
         (message->state_domains & BEACON_STATE_DOMAIN_SYSTEM) != 0U &&
         beacon_ui_system_status_changed(&app_state.system, &message->state.system);
     beacon_app_state_apply(&app_state, &message->state, message->state_domains,
                            message->revision);
+    const bool page_changed =
+        (message->state_domains & BEACON_STATE_DOMAIN_AGENTS) != 0U &&
+        beacon_ui_state_set_codex_active(ui_state, app_state.agents.codex_active);
     connection_snapshot_ready = beacon_ui_connection_snapshot_ready(
         connection_snapshot_ready, beacon_network_is_connected(),
         message->type == BEACON_PROTOCOL_MESSAGE_SNAPSHOT);
     beacon_ui_set_app_state(&app_state);
     beacon_ui_set_connection_snapshot_ready(connection_snapshot_ready);
-    if (ui_state->mode == BEACON_UI_DIAGNOSTICS) {
+    if (page_changed) {
+        beacon_ui_show_page(ui_state->page);
+    } else if (ui_state->mode == BEACON_UI_DIAGNOSTICS) {
         beacon_ui_show_diagnostics();
     } else if (ui_state->mode == BEACON_UI_CAROUSEL &&
                beacon_ui_page_affected_by_domains(ui_state->page,

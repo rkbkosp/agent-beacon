@@ -6,7 +6,7 @@
 int main(void)
 {
     static const char *const expected_titles[] = {
-        "CODEX 配额",
+        "TOKEN 速度",
         "智能体",
         "天气",
     };
@@ -24,6 +24,11 @@ int main(void)
     assert(strcmp(state->codex.homes[0].label, "MAIN") == 0);
     assert(state->codex.homes[0].weekly_remaining_percent == 18);
     assert(strcmp(state->codex.relay.display, "$14.16") == 0);
+    assert(state->codex.token_rate.available);
+    assert(state->codex.token_rate.tokens_per_second > 42.6f &&
+           state->codex.token_rate.tokens_per_second < 42.8f);
+    assert(state->codex.token_rate.active_sessions == 2);
+    assert(state->codex.token_rate.active_streams == 3);
     assert(state->agents.item_count == 4);
     assert(state->weather.current.temp_c == 31);
     assert(state->weather.next_outing.umbrella_required == true);

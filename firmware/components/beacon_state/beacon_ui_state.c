@@ -10,6 +10,7 @@ uint32_t beacon_ui_page_interval_ms(beacon_page_t page)
     case BEACON_PAGE_AGENTS:
         return 6000;
     case BEACON_PAGE_CODEX:
+        return 15000;
     case BEACON_PAGE_WEATHER:
     default:
         return 8000;
@@ -63,9 +64,17 @@ bool beacon_ui_page_affected_by_domains(beacon_page_t page, uint8_t domains,
     return system_status_changed && (domains & BEACON_STATE_DOMAIN_SYSTEM) != 0U;
 }
 
-static beacon_page_t next_page(beacon_page_t page)
+static beacon_page_t next_page(beacon_page_t page, bool codex_active)
 {
-    return (beacon_page_t)(((unsigned int)page + 1U) % BEACON_PAGE_COUNT);
+    switch (page) {
+    case BEACON_PAGE_CODEX:
+        return BEACON_PAGE_AGENTS;
+    case BEACON_PAGE_AGENTS:
+        return BEACON_PAGE_WEATHER;
+    case BEACON_PAGE_WEATHER:
+    default:
+        return codex_active ? BEACON_PAGE_CODEX : BEACON_PAGE_AGENTS;
+    }
 }
 
 void beacon_ui_state_init(beacon_ui_state_t *state)
@@ -76,12 +85,52 @@ void beacon_ui_state_init(beacon_ui_state_t *state)
     *state = (beacon_ui_state_t) {
         .mode = BEACON_UI_CAROUSEL,
         .saved_mode = BEACON_UI_CAROUSEL,
-        .page = BEACON_PAGE_CODEX,
-        .saved_page = BEACON_PAGE_CODEX,
+        .page = BEACON_PAGE_AGENTS,
+        .saved_page = BEACON_PAGE_AGENTS,
         .theme = BEACON_THEME_BLUE,
-        .carousel_remaining_ms = 8000,
-        .saved_carousel_remaining_ms = 8000,
+        .codex_active = false,
+        .carousel_remaining_ms = 6000,
+        .saved_carousel_remaining_ms = 6000,
     };
+}
+
+bool beacon_ui_state_set_codex_active(beacon_ui_state_t *state, bool active)
+{
+    if (state == NULL || state->codex_active == active) {
+        return false;
+    }
+
+    state->codex_active = active;
+    if (active) {
+        if (state->mode == BEACON_UI_NOTIFICATION) {
+            state->saved_page = BEACON_PAGE_CODEX;
+            state->saved_carousel_remaining_ms =
+                beacon_ui_page_interval_ms(BEACON_PAGE_CODEX);
+            return false;
+        }
+
+        const bool visible_page_changed =
+            state->mode == BEACON_UI_CAROUSEL && state->page != BEACON_PAGE_CODEX;
+        state->page = BEACON_PAGE_CODEX;
+        state->carousel_remaining_ms = beacon_ui_page_interval_ms(BEACON_PAGE_CODEX);
+        return visible_page_changed;
+    }
+
+    if (state->mode == BEACON_UI_NOTIFICATION) {
+        if (state->saved_page == BEACON_PAGE_CODEX) {
+            state->saved_page = BEACON_PAGE_AGENTS;
+            state->saved_carousel_remaining_ms =
+                beacon_ui_page_interval_ms(BEACON_PAGE_AGENTS);
+        }
+        return false;
+    }
+
+    if (state->page != BEACON_PAGE_CODEX) {
+        return false;
+    }
+    state->page = BEACON_PAGE_AGENTS;
+    state->carousel_remaining_ms = beacon_ui_page_interval_ms(BEACON_PAGE_AGENTS);
+    return state->mode == BEACON_UI_CAROUSEL;
 }
 
 bool beacon_ui_state_tick(beacon_ui_state_t *state, uint32_t elapsed_ms)
@@ -109,7 +158,7 @@ bool beacon_ui_state_tick(beacon_ui_state_t *state, uint32_t elapsed_ms)
 
     while (elapsed_ms >= state->carousel_remaining_ms) {
         elapsed_ms -= state->carousel_remaining_ms;
-        state->page = next_page(state->page);
+        state->page = next_page(state->page, state->codex_active);
         state->carousel_remaining_ms = beacon_ui_page_interval_ms(state->page);
         changed = true;
     }
@@ -122,7 +171,7 @@ void beacon_ui_state_next_page(beacon_ui_state_t *state)
     if (state == NULL || state->mode != BEACON_UI_CAROUSEL) {
         return;
     }
-    state->page = next_page(state->page);
+    state->page = next_page(state->page, state->codex_active);
     state->carousel_remaining_ms = beacon_ui_page_interval_ms(state->page);
 }
 

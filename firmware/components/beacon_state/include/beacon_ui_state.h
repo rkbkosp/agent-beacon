@@ -31,6 +31,7 @@ typedef struct {
     beacon_page_t page;
     beacon_page_t saved_page;
     beacon_theme_t theme;
+    bool codex_active;
     uint32_t carousel_remaining_ms;
     uint32_t saved_carousel_remaining_ms;
     uint32_t notification_remaining_ms;
@@ -46,6 +47,7 @@ bool beacon_ui_system_status_changed(const beacon_system_state_t *current,
 bool beacon_ui_page_affected_by_domains(beacon_page_t page, uint8_t domains,
                                         bool system_status_changed);
 void beacon_ui_state_init(beacon_ui_state_t *state);
+bool beacon_ui_state_set_codex_active(beacon_ui_state_t *state, bool active);
 bool beacon_ui_state_tick(beacon_ui_state_t *state, uint32_t elapsed_ms);
 void beacon_ui_state_next_page(beacon_ui_state_t *state);
 void beacon_ui_state_show_notification(beacon_ui_state_t *state, beacon_theme_t theme,
