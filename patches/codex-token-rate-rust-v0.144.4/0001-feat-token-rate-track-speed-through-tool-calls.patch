@@ -1,0 +1,3573 @@
+From 4bdc000ed6fbdffe708b5b229266b8ba386aa43b Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E2=80=9Crkbkosp=E2=80=9D?= <whitemousehuang@gmail.com>
+Date: Thu, 16 Jul 2026 10:03:12 +0800
+Subject: [PATCH 1/3] feat(token-rate): track speed through tool calls
+
+- count streamed function arguments alongside assistant output
+- hold each stream rate until its tool executions finish
+- add the aggregation daemon, lifecycle coverage, and install helper
+---
+ codex-rs/Cargo.lock                           | 279 ++++++-----
+ codex-rs/Cargo.toml                           |   1 +
+ codex-rs/codex-api/src/sse/responses.rs       |  12 +-
+ codex-rs/core/src/config/mod.rs               |   4 +
+ codex-rs/core/src/lib.rs                      |   1 +
+ codex-rs/core/src/live_token_rate.rs          | 306 +++++++++++
+ codex-rs/core/src/live_token_rate_tests.rs    | 248 +++++++++
+ codex-rs/core/src/session/turn.rs             |  21 +-
+ codex-rs/core/src/test_support.rs             |   4 +
+ codex-rs/core/tests/suite/live_token_rate.rs  | 116 +++++
+ codex-rs/core/tests/suite/mod.rs              |   2 +
+ codex-rs/token-rate-daemon/BUILD.bazel        |   6 +
+ codex-rs/token-rate-daemon/Cargo.toml         |  33 ++
+ codex-rs/token-rate-daemon/README.md          |  48 ++
+ codex-rs/token-rate-daemon/src/aggregation.rs | 198 ++++++++
+ .../src/aggregation_tests.rs                  | 222 ++++++++
+ codex-rs/token-rate-daemon/src/daemon.rs      | 474 ++++++++++++++++++
+ .../token-rate-daemon/src/daemon_tests.rs     | 129 +++++
+ codex-rs/token-rate-daemon/src/main.rs        |  19 +
+ .../token-rate-daemon/tests/global_rate.rs    | 241 +++++++++
+ scripts/install-patched-codex.sh              |  41 ++
+ 21 files changed, 2270 insertions(+), 135 deletions(-)
+ create mode 100644 codex-rs/core/src/live_token_rate.rs
+ create mode 100644 codex-rs/core/src/live_token_rate_tests.rs
+ create mode 100644 codex-rs/core/tests/suite/live_token_rate.rs
+ create mode 100644 codex-rs/token-rate-daemon/BUILD.bazel
+ create mode 100644 codex-rs/token-rate-daemon/Cargo.toml
+ create mode 100644 codex-rs/token-rate-daemon/README.md
+ create mode 100644 codex-rs/token-rate-daemon/src/aggregation.rs
+ create mode 100644 codex-rs/token-rate-daemon/src/aggregation_tests.rs
+ create mode 100644 codex-rs/token-rate-daemon/src/daemon.rs
+ create mode 100644 codex-rs/token-rate-daemon/src/daemon_tests.rs
+ create mode 100644 codex-rs/token-rate-daemon/src/main.rs
+ create mode 100644 codex-rs/token-rate-daemon/tests/global_rate.rs
+ create mode 100755 scripts/install-patched-codex.sh
+
+diff --git a/codex-rs/Cargo.lock b/codex-rs/Cargo.lock
+index 023c5dfaa366b63eaad13a93134f9b7c1740322d..dcaddffe517333ae24155681fd41638ec191ef75 100644
+--- a/codex-rs/Cargo.lock
++++ b/codex-rs/Cargo.lock
+@@ -394,7 +394,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+ 
+ [[package]]
+ name = "app_test_support"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -1868,7 +1868,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-agent-graph-store"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-protocol",
+  "codex-state",
+@@ -1882,7 +1882,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-agent-identity"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -1901,7 +1901,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-analytics"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-app-server-protocol",
+  "codex-git-utils",
+@@ -1922,7 +1922,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-ansi-escape"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "ansi-to-tui",
+  "ratatui",
+@@ -1931,7 +1931,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-api"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "assert_matches",
+@@ -1966,7 +1966,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-app-server"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "app_test_support",
+@@ -2060,7 +2060,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-app-server-client"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-app-server",
+  "codex-app-server-protocol",
+@@ -2087,7 +2087,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-app-server-daemon"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "codex-app-server-protocol",
+@@ -2108,7 +2108,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-app-server-protocol"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -2137,7 +2137,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-app-server-test-client"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -2159,7 +2159,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-app-server-transport"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "axum",
+@@ -2201,7 +2201,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-apply-patch"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "assert_cmd",
+@@ -2221,7 +2221,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-arg0"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "codex-apply-patch",
+@@ -2241,7 +2241,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-async-utils"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "pretty_assertions",
+  "tokio",
+@@ -2250,7 +2250,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-aws-auth"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "aws-config",
+  "aws-credential-types",
+@@ -2265,7 +2265,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-backend-client"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "codex-api",
+@@ -2282,7 +2282,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-backend-openapi-models"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "serde",
+  "serde_json",
+@@ -2291,7 +2291,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-bwrap"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "cc",
+  "libc",
+@@ -2300,7 +2300,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-chatgpt"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -2321,7 +2321,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-cli"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "app_test_support",
+@@ -2398,7 +2398,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-client"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-http-client",
+  "eventsource-stream",
+@@ -2410,7 +2410,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-cloud-config"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "base64 0.22.1",
+  "chrono",
+@@ -2434,7 +2434,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-cloud-tasks"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -2465,7 +2465,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-cloud-tasks-client"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -2479,7 +2479,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-cloud-tasks-mock-client"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "chrono",
+  "codex-cloud-tasks-client",
+@@ -2488,7 +2488,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-code-mode"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-code-mode-protocol",
+  "codex-protocol",
+@@ -2504,7 +2504,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-code-mode-host"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "codex-code-mode",
+@@ -2520,7 +2520,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-code-mode-protocol"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-protocol",
+  "pretty_assertions",
+@@ -2532,11 +2532,11 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-collaboration-mode-templates"
+-version = "0.0.0"
++version = "0.144.4"
+ 
+ [[package]]
+ name = "codex-config"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -2584,7 +2584,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-connectors"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "codex-config",
+@@ -2602,7 +2602,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-connectors-extension"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-connectors",
+  "codex-core-plugins",
+@@ -2614,7 +2614,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-context-fragments"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-protocol",
+  "codex-utils-string",
+@@ -2622,7 +2622,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-core"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "arc-swap",
+@@ -2749,7 +2749,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-core-api"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-analytics",
+  "codex-app-server-protocol",
+@@ -2770,7 +2770,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-core-plugins"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -2818,7 +2818,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-core-skills"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "codex-analytics",
+@@ -2852,7 +2852,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-exec"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "assert_cmd",
+@@ -2898,7 +2898,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-exec-server"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "arc-swap",
+@@ -2950,7 +2950,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-exec-server-protocol"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-file-system",
+@@ -2965,7 +2965,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-execpolicy"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -2982,7 +2982,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-execpolicy-legacy"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "allocative",
+  "anyhow",
+@@ -3002,7 +3002,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-experimental-api-macros"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "proc-macro2",
+  "quote",
+@@ -3011,7 +3011,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-extension-api"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-config",
+  "codex-context-fragments",
+@@ -3025,7 +3025,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-extension-items"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-utils-absolute-path",
+  "pretty_assertions",
+@@ -3037,7 +3037,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-external-agent-migration"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-hooks",
+  "pretty_assertions",
+@@ -3049,7 +3049,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-external-agent-sessions"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "chrono",
+  "codex-app-server-protocol",
+@@ -3063,7 +3063,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-features"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-otel",
+  "codex-protocol",
+@@ -3076,7 +3076,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-feedback"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "codex-login",
+@@ -3090,7 +3090,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-file-search"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -3106,7 +3106,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-file-system"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "bytes",
+  "codex-protocol",
+@@ -3118,7 +3118,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-file-watcher"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "notify",
+  "pretty_assertions",
+@@ -3129,7 +3129,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-git-utils"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -3154,7 +3154,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-goal-extension"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -3176,7 +3176,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-guardian"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-core",
+  "codex-extension-api",
+@@ -3185,7 +3185,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-home"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-extension-api",
+  "codex-utils-absolute-path",
+@@ -3196,7 +3196,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-hooks"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -3219,7 +3219,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-http-client"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "bytes",
+  "codex-utils-cargo-bin",
+@@ -3250,7 +3250,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-image-generation-extension"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-api",
+@@ -3277,7 +3277,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-install-context"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-utils-absolute-path",
+  "codex-utils-home-dir",
+@@ -3287,7 +3287,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-keyring-store"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "keyring",
+  "tracing",
+@@ -3295,7 +3295,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-linux-sandbox"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "clap",
+  "codex-core",
+@@ -3320,7 +3320,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-lmstudio"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-core",
+  "codex-model-provider-info",
+@@ -3334,7 +3334,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-login"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -3375,7 +3375,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-mcp"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "arc-swap",
+@@ -3410,7 +3410,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-mcp-extension"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-config",
+  "codex-connectors-extension",
+@@ -3435,7 +3435,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-mcp-server"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "codex-arg0",
+@@ -3469,7 +3469,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-memories-extension"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-core",
+  "codex-extension-api",
+@@ -3490,7 +3490,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-memories-read"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-protocol",
+  "codex-shell-command",
+@@ -3500,7 +3500,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-memories-write"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -3537,7 +3537,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-message-history"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-config",
+  "memchr",
+@@ -3551,7 +3551,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-model-provider"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-agent-identity",
+  "codex-api",
+@@ -3574,7 +3574,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-model-provider-info"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-api",
+  "codex-protocol",
+@@ -3590,7 +3590,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-models-manager"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "chrono",
+  "codex-collaboration-mode-templates",
+@@ -3610,7 +3610,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-network-proxy"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -3646,7 +3646,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-ollama"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "assert_matches",
+  "async-stream",
+@@ -3666,7 +3666,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-otel"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "chrono",
+  "codex-api",
+@@ -3697,7 +3697,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-plugin"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-config",
+  "codex-protocol",
+@@ -3710,7 +3710,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-process-hardening"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "libc",
+  "pretty_assertions",
+@@ -3718,7 +3718,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-prompts"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "codex-context-fragments",
+@@ -3732,7 +3732,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-protocol"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "chardetng",
+@@ -3774,7 +3774,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-realtime-webrtc"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "libwebrtc",
+  "thiserror 2.0.18",
+@@ -3783,7 +3783,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-response-debug-context"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-api",
+@@ -3794,7 +3794,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-responses-api-proxy"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -3811,7 +3811,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-rmcp-client"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "axum",
+@@ -3852,7 +3852,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-rollout"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -3876,7 +3876,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-rollout-trace"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "codex-code-mode",
+@@ -3892,7 +3892,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-sandboxing"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "codex-network-proxy",
+@@ -3915,7 +3915,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-secrets"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "age",
+  "anyhow",
+@@ -3936,7 +3936,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-shell-command"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -3957,7 +3957,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-shell-escalation"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -3977,7 +3977,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-skills"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-utils-absolute-path",
+  "include_dir",
+@@ -3986,7 +3986,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-skills-extension"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-core-skills",
+  "codex-exec-server",
+@@ -4008,7 +4008,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-state"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -4032,7 +4032,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-stdio-to-uds"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "codex-uds",
+@@ -4044,7 +4044,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-terminal-detection"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "pretty_assertions",
+  "tracing",
+@@ -4052,7 +4052,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-test-binary-support"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-arg0",
+  "tempfile",
+@@ -4060,7 +4060,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-thread-manager-sample"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -4071,7 +4071,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-thread-store"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "chrono",
+  "codex-git-utils",
+@@ -4091,9 +4091,24 @@ dependencies = [
+  "uuid",
+ ]
+ 
++[[package]]
++name = "codex-token-rate-daemon"
++version = "0.144.4"
++dependencies = [
++ "anyhow",
++ "clap",
++ "codex-utils-cargo-bin",
++ "libc",
++ "pretty_assertions",
++ "serde",
++ "serde_json",
++ "tempfile",
++ "tokio",
++]
++
+ [[package]]
+ name = "codex-tools"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-code-mode",
+  "codex-connectors",
+@@ -4118,7 +4133,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-tui"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "app_test_support",
+@@ -4228,7 +4243,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-uds"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "async-io",
+  "pretty_assertions",
+@@ -4240,7 +4255,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-absolute-path"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "dirs",
+  "dunce",
+@@ -4254,14 +4269,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-approval-presets"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-protocol",
+ ]
+ 
+ [[package]]
+ name = "codex-utils-cache"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "lru 0.16.3",
+  "sha1 0.10.6",
+@@ -4270,7 +4285,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-cargo-bin"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "assert_cmd",
+  "runfiles",
+@@ -4279,7 +4294,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-cli"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "clap",
+  "codex-protocol",
+@@ -4291,15 +4306,15 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-elapsed"
+-version = "0.0.0"
++version = "0.144.4"
+ 
+ [[package]]
+ name = "codex-utils-fuzzy-match"
+-version = "0.0.0"
++version = "0.144.4"
+ 
+ [[package]]
+ name = "codex-utils-home-dir"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-utils-absolute-path",
+  "dirs",
+@@ -4309,7 +4324,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-image"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-utils-cache",
+@@ -4322,7 +4337,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-json-to-toml"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "pretty_assertions",
+  "serde_json",
+@@ -4331,7 +4346,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-oss"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-core",
+  "codex-lmstudio",
+@@ -4341,7 +4356,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-output-truncation"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-protocol",
+  "codex-utils-string",
+@@ -4350,7 +4365,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-path"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-utils-absolute-path",
+  "dunce",
+@@ -4360,7 +4375,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-path-uri"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-utils-absolute-path",
+@@ -4376,7 +4391,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-plugins"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-exec-server",
+  "codex-utils-absolute-path",
+@@ -4389,7 +4404,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-pty"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "filedescriptor",
+@@ -4405,7 +4420,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-readiness"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "assert_matches",
+  "thiserror 2.0.18",
+@@ -4415,14 +4430,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-rustls-provider"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "rustls",
+ ]
+ 
+ [[package]]
+ name = "codex-utils-sandbox-summary"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-core",
+  "codex-model-provider-info",
+@@ -4433,7 +4448,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-sleep-inhibitor"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "core-foundation 0.9.4",
+  "libc",
+@@ -4443,14 +4458,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-stream-parser"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "pretty_assertions",
+ ]
+ 
+ [[package]]
+ name = "codex-utils-string"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "pretty_assertions",
+  "regex-lite",
+@@ -4460,14 +4475,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-template"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "pretty_assertions",
+ ]
+ 
+ [[package]]
+ name = "codex-v8-poc"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "pretty_assertions",
+  "v8",
+@@ -4475,7 +4490,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-web-search-extension"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-api",
+  "codex-core",
+@@ -4495,7 +4510,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-websocket-client"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "codex-http-client",
+  "codex-utils-rustls-provider",
+@@ -4511,7 +4526,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-windows-sandbox"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -4768,7 +4783,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "core_test_support"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "assert_cmd",
+@@ -9154,7 +9169,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "mcp_test_support"
+-version = "0.0.0"
++version = "0.144.4"
+ dependencies = [
+  "anyhow",
+  "codex-login",
+diff --git a/codex-rs/Cargo.toml b/codex-rs/Cargo.toml
+index 7f50be4f823e18c6ee84d5aa97cc1a7c8b05c4dd..296a607c90dc3b8ce36ad97571c5542f9556c0e3 100644
+--- a/codex-rs/Cargo.toml
++++ b/codex-rs/Cargo.toml
+@@ -122,6 +122,7 @@ members = [
+     "test-binary-support",
+     "thread-manager-sample",
+     "thread-store",
++    "token-rate-daemon",
+     "uds",
+     "codex-experimental-api-macros",
+     "plugin",
+diff --git a/codex-rs/codex-api/src/sse/responses.rs b/codex-rs/codex-api/src/sse/responses.rs
+index 70f96cb855005d577c57fd768062d035cc919b12..907675d3bce3f231a8f26537e25fcbf2abfae76d 100644
+--- a/codex-rs/codex-api/src/sse/responses.rs
++++ b/codex-rs/codex-api/src/sse/responses.rs
+@@ -340,7 +340,7 @@ pub fn process_responses_event(
+                 return Ok(Some(ResponseEvent::OutputTextDelta(delta)));
+             }
+         }
+-        "response.custom_tool_call_input.delta" => {
++        "response.custom_tool_call_input.delta" | "response.function_call_arguments.delta" => {
+             if let (Some(delta), Some(item_id)) =
+                 (event.delta, event.item_id.clone().or(event.call_id.clone()))
+             {
+@@ -924,7 +924,15 @@ mod tests {
+                 delta,
+             } if item_id == "ctc_1" && call_id == "call_1" && delta == "*** Begin"
+         );
+-        assert_matches!(&events[1], ResponseEvent::Completed { .. });
++        assert_matches!(
++            &events[1],
++            ResponseEvent::ToolCallInputDelta {
++                item_id,
++                call_id: None,
++                delta,
++            } if item_id == "fc_1" && delta == "{\"input\":\""
++        );
++        assert_matches!(&events[2], ResponseEvent::Completed { .. });
+     }
+ 
+     #[tokio::test]
+diff --git a/codex-rs/core/src/config/mod.rs b/codex-rs/core/src/config/mod.rs
+index 6348f14c04432d85794f9d973a4c3dce17ab536e..f3fb3603d93b746b2d0756a148dd46d229c2656d 100644
+--- a/codex-rs/core/src/config/mod.rs
++++ b/codex-rs/core/src/config/mod.rs
+@@ -913,6 +913,9 @@ pub struct Config {
+     /// This is a runtime-only knob populated from invocation overrides, not from config files.
+     pub bypass_hook_trust: bool,
+ 
++    /// Runtime-only override for the live token-rate reporter socket.
++    pub(crate) live_token_rate_socket: Option<PathBuf>,
++
+     /// Optional URI-based file opener. If set, citations to files in the model
+     /// output will be hyperlinked using the specified URI scheme.
+     pub file_opener: UriBasedFileOpener,
+@@ -3888,6 +3891,7 @@ impl Config {
+             ephemeral: ephemeral.unwrap_or_default(),
+             extra_config: None,
+             bypass_hook_trust,
++            live_token_rate_socket: None,
+             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
+             codex_self_exe,
+             codex_linux_sandbox_exe,
+diff --git a/codex-rs/core/src/lib.rs b/codex-rs/core/src/lib.rs
+index cfc26c5711646ffe41f802177e28254bec4912a1..ab8fc7538014c317e4846a9530cada64ed306236 100644
+--- a/codex-rs/core/src/lib.rs
++++ b/codex-rs/core/src/lib.rs
+@@ -53,6 +53,7 @@ mod hook_runtime;
+ mod image_preparation;
+ mod installation_id;
+ pub(crate) mod landlock;
++mod live_token_rate;
+ pub use landlock::spawn_command_under_linux_sandbox;
+ pub(crate) mod mcp;
+ mod mcp_skill_dependencies;
+diff --git a/codex-rs/core/src/live_token_rate.rs b/codex-rs/core/src/live_token_rate.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..1666c7281be32d91cbe999ea39b31f29eb5fc99e
+--- /dev/null
++++ b/codex-rs/core/src/live_token_rate.rs
+@@ -0,0 +1,306 @@
++use std::fmt::Display;
++use std::path::PathBuf;
++use std::sync::atomic::AtomicU64;
++use std::sync::atomic::Ordering;
++use std::time::Duration;
++use std::time::Instant;
++use std::time::SystemTime;
++use std::time::UNIX_EPOCH;
++
++use codex_protocol::protocol::TokenUsage;
++use codex_utils_output_truncation::approx_tokens_from_byte_count;
++use serde::Serialize;
++
++#[cfg(unix)]
++use std::os::unix::net::UnixDatagram;
++#[cfg(unix)]
++use std::sync::OnceLock;
++
++#[cfg(unix)]
++const SOCKET_ENV_VAR: &str = "CODEX_TOKEN_RATE_SOCKET";
++const MIN_EMIT_INTERVAL: Duration = Duration::from_millis(50);
++const MIN_EMIT_TOKENS: u64 = 8;
++const PROTOCOL_VERSION: u8 = 1;
++
++static NEXT_STREAM_SEQUENCE: AtomicU64 = AtomicU64::new(1);
++
++pub(crate) struct LiveTokenRateReporter {
++    enabled: Option<EnabledReporter>,
++}
++
++struct EnabledReporter {
++    socket_path: PathBuf,
++    pid: u32,
++    session_id: String,
++    turn_id: String,
++    stream_id: String,
++    model: String,
++    total_output_bytes: usize,
++    emitted_estimated_tokens: u64,
++    pending_tokens: u64,
++    pending_bytes: usize,
++    last_emit_at: Instant,
++    state: ReporterState,
++}
++
++#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
++#[serde(rename_all = "snake_case")]
++pub(crate) enum PostResponsePhase {
++    Idle,
++    ToolExecution,
++}
++
++#[derive(Clone, Copy, PartialEq, Eq)]
++enum ReporterState {
++    Streaming,
++    ToolExecution,
++    Finished,
++}
++
++#[derive(Serialize)]
++struct DeltaEvent<'a> {
++    v: u8,
++    event: &'static str,
++    ts_unix_ms: u64,
++    pid: u32,
++    session_id: &'a str,
++    turn_id: &'a str,
++    stream_id: &'a str,
++    model: &'a str,
++    kind: &'static str,
++    estimated_tokens: u64,
++    utf8_bytes: u64,
++}
++
++#[derive(Serialize)]
++struct ResponseCompletedEvent<'a> {
++    v: u8,
++    event: &'static str,
++    ts_unix_ms: u64,
++    pid: u32,
++    session_id: &'a str,
++    turn_id: &'a str,
++    stream_id: &'a str,
++    model: &'a str,
++    estimated_output_tokens: u64,
++    usage: Option<&'a TokenUsage>,
++    next_phase: PostResponsePhase,
++}
++
++#[derive(Serialize)]
++struct ToolExecutionCompletedEvent<'a> {
++    v: u8,
++    event: &'static str,
++    ts_unix_ms: u64,
++    pid: u32,
++    session_id: &'a str,
++    turn_id: &'a str,
++    stream_id: &'a str,
++    model: &'a str,
++}
++
++impl LiveTokenRateReporter {
++    pub(crate) fn new(
++        socket_path_override: Option<PathBuf>,
++        session_id: impl Display,
++        turn_id: &str,
++        model: &str,
++    ) -> Self {
++        Self::from_socket_path(
++            socket_path_override.or_else(configured_socket_path),
++            session_id,
++            turn_id,
++            model,
++        )
++    }
++
++    fn from_socket_path(
++        socket_path: Option<PathBuf>,
++        session_id: impl Display,
++        turn_id: &str,
++        model: &str,
++    ) -> Self {
++        let Some(socket_path) = socket_path.filter(|path| path.is_absolute()) else {
++            return Self { enabled: None };
++        };
++        let pid = std::process::id();
++        let sequence = NEXT_STREAM_SEQUENCE.fetch_add(1, Ordering::Relaxed);
++        Self {
++            enabled: Some(EnabledReporter {
++                socket_path,
++                pid,
++                session_id: session_id.to_string(),
++                turn_id: turn_id.to_string(),
++                stream_id: format!("{pid}-{sequence}"),
++                model: model.to_string(),
++                total_output_bytes: 0,
++                emitted_estimated_tokens: 0,
++                pending_tokens: 0,
++                pending_bytes: 0,
++                last_emit_at: Instant::now(),
++                state: ReporterState::Streaming,
++            }),
++        }
++    }
++
++    pub(crate) fn observe_completion_delta(&mut self, delta: &str) {
++        let Some(reporter) = self.enabled.as_mut() else {
++            return;
++        };
++        if reporter.state != ReporterState::Streaming || delta.is_empty() {
++            return;
++        }
++
++        reporter.total_output_bytes = reporter.total_output_bytes.saturating_add(delta.len());
++        reporter.pending_bytes = reporter.pending_bytes.saturating_add(delta.len());
++        let estimated_tokens = approx_tokens_from_byte_count(reporter.total_output_bytes);
++        let increment = estimated_tokens.saturating_sub(reporter.emitted_estimated_tokens);
++        if increment > 0 {
++            reporter.emitted_estimated_tokens = estimated_tokens;
++            reporter.pending_tokens = reporter.pending_tokens.saturating_add(increment);
++        }
++
++        if reporter.pending_tokens >= MIN_EMIT_TOKENS
++            || reporter.last_emit_at.elapsed() >= MIN_EMIT_INTERVAL
++        {
++            reporter.flush_delta();
++        }
++    }
++
++    pub(crate) fn response_completed(
++        &mut self,
++        usage: Option<&TokenUsage>,
++        next_phase: PostResponsePhase,
++    ) {
++        let Some(reporter) = self.enabled.as_mut() else {
++            return;
++        };
++        if reporter.state != ReporterState::Streaming {
++            return;
++        }
++
++        reporter.flush_delta();
++        reporter.send(&ResponseCompletedEvent {
++            v: PROTOCOL_VERSION,
++            event: "response_completed",
++            ts_unix_ms: unix_timestamp_ms(),
++            pid: reporter.pid,
++            session_id: &reporter.session_id,
++            turn_id: &reporter.turn_id,
++            stream_id: &reporter.stream_id,
++            model: &reporter.model,
++            estimated_output_tokens: approx_tokens_from_byte_count(reporter.total_output_bytes),
++            usage,
++            next_phase,
++        });
++        reporter.state = match next_phase {
++            PostResponsePhase::Idle => ReporterState::Finished,
++            PostResponsePhase::ToolExecution => ReporterState::ToolExecution,
++        };
++    }
++
++    pub(crate) fn tool_execution_completed(&mut self) {
++        if let Some(reporter) = self.enabled.as_mut() {
++            reporter.complete_tool_execution();
++        }
++    }
++}
++
++impl Drop for LiveTokenRateReporter {
++    fn drop(&mut self) {
++        if let Some(reporter) = self.enabled.as_mut() {
++            match reporter.state {
++                ReporterState::Streaming => reporter.flush_delta(),
++                ReporterState::ToolExecution => reporter.complete_tool_execution(),
++                ReporterState::Finished => {}
++            }
++        }
++    }
++}
++
++impl EnabledReporter {
++    fn flush_delta(&mut self) {
++        if self.pending_tokens == 0 {
++            return;
++        }
++        self.send(&DeltaEvent {
++            v: PROTOCOL_VERSION,
++            event: "delta",
++            ts_unix_ms: unix_timestamp_ms(),
++            pid: self.pid,
++            session_id: &self.session_id,
++            turn_id: &self.turn_id,
++            stream_id: &self.stream_id,
++            model: &self.model,
++            kind: "completion_output",
++            estimated_tokens: self.pending_tokens,
++            utf8_bytes: u64::try_from(self.pending_bytes).unwrap_or(u64::MAX),
++        });
++        self.pending_tokens = 0;
++        self.pending_bytes = 0;
++        self.last_emit_at = Instant::now();
++    }
++
++    fn complete_tool_execution(&mut self) {
++        if self.state != ReporterState::ToolExecution {
++            return;
++        }
++        self.send(&ToolExecutionCompletedEvent {
++            v: PROTOCOL_VERSION,
++            event: "tool_execution_completed",
++            ts_unix_ms: unix_timestamp_ms(),
++            pid: self.pid,
++            session_id: &self.session_id,
++            turn_id: &self.turn_id,
++            stream_id: &self.stream_id,
++            model: &self.model,
++        });
++        self.state = ReporterState::Finished;
++    }
++
++    fn send(&self, event: &impl Serialize) {
++        #[cfg(unix)]
++        if let Ok(payload) = serde_json::to_vec(event)
++            && let Some(socket) = sender_socket()
++        {
++            let _ = socket.send_to(&payload, &self.socket_path);
++        }
++
++        #[cfg(not(unix))]
++        let _ = event;
++    }
++}
++
++fn unix_timestamp_ms() -> u64 {
++    let millis = SystemTime::now()
++        .duration_since(UNIX_EPOCH)
++        .unwrap_or_default()
++        .as_millis();
++    u64::try_from(millis).unwrap_or(u64::MAX)
++}
++
++#[cfg(unix)]
++fn configured_socket_path() -> Option<PathBuf> {
++    std::env::var_os(SOCKET_ENV_VAR).map(PathBuf::from)
++}
++
++#[cfg(not(unix))]
++fn configured_socket_path() -> Option<PathBuf> {
++    None
++}
++
++#[cfg(unix)]
++fn sender_socket() -> Option<&'static UnixDatagram> {
++    static SOCKET: OnceLock<Option<UnixDatagram>> = OnceLock::new();
++    SOCKET
++        .get_or_init(|| {
++            let socket = UnixDatagram::unbound().ok()?;
++            socket.set_nonblocking(true).ok()?;
++            Some(socket)
++        })
++        .as_ref()
++}
++
++#[cfg(test)]
++#[path = "live_token_rate_tests.rs"]
++mod tests;
+diff --git a/codex-rs/core/src/live_token_rate_tests.rs b/codex-rs/core/src/live_token_rate_tests.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..22e7adf0d437e495005b2f781a94fd989b576267
+--- /dev/null
++++ b/codex-rs/core/src/live_token_rate_tests.rs
+@@ -0,0 +1,248 @@
++use super::*;
++
++#[cfg(unix)]
++use anyhow::Result;
++#[cfg(unix)]
++use anyhow::anyhow;
++#[cfg(unix)]
++use codex_protocol::protocol::TokenUsage;
++#[cfg(unix)]
++use pretty_assertions::assert_eq;
++#[cfg(unix)]
++use serde_json::Value;
++#[cfg(unix)]
++use std::io::ErrorKind;
++#[cfg(unix)]
++use std::os::unix::net::UnixDatagram;
++#[cfg(unix)]
++use std::thread;
++#[cfg(unix)]
++use tempfile::TempDir;
++
++#[test]
++fn disabled_reporter_is_a_no_op() {
++    let mut reporter = LiveTokenRateReporter::from_socket_path(
++        /*socket_path*/ None, "session", "turn", "model",
++    );
++
++    assert!(reporter.enabled.is_none());
++    reporter.observe_completion_delta("private output");
++    reporter.response_completed(/*usage*/ None, PostResponsePhase::Idle);
++}
++
++#[cfg(unix)]
++#[test]
++fn estimate_is_independent_of_delta_chunking() -> Result<()> {
++    let single = completed_event(&["hello world"])?;
++    let chunked = completed_event(&["he", "llo ", "wor", "ld"])?;
++
++    assert_eq!(
++        single["estimated_output_tokens"],
++        chunked["estimated_output_tokens"]
++    );
++    Ok(())
++}
++
++#[cfg(unix)]
++#[test]
++fn estimate_uses_cumulative_utf8_bytes() -> Result<()> {
++    for chunks in [
++        vec![""],
++        vec!["hello"],
++        vec!["你", "好"],
++        vec!["🙂"],
++        vec!["hello ", "世界", " 🙂"],
++    ] {
++        let text = chunks.concat();
++        let completed = completed_event(&chunks)?;
++        assert_eq!(
++            completed["estimated_output_tokens"],
++            approx_tokens_from_byte_count(text.len())
++        );
++    }
++    Ok(())
++}
++
++#[cfg(unix)]
++#[test]
++fn token_threshold_batches_small_deltas() -> Result<()> {
++    let (_temp_dir, path, receiver) = bound_receiver()?;
++    let mut reporter = reporter_for_path(path);
++
++    reporter.observe_completion_delta("abcd");
++    assert_no_datagram(&receiver)?;
++    reporter.observe_completion_delta(&"x".repeat(28));
++
++    let event = recv_json(&receiver)?;
++    assert_eq!(event["event"], "delta");
++    assert_eq!(event["estimated_tokens"], 8);
++    assert_eq!(event["utf8_bytes"], 32);
++    Ok(())
++}
++
++#[cfg(unix)]
++#[test]
++fn elapsed_interval_flushes_pending_tokens() -> Result<()> {
++    let (_temp_dir, path, receiver) = bound_receiver()?;
++    let mut reporter = reporter_for_path(path);
++
++    reporter.observe_completion_delta("abcd");
++    assert_no_datagram(&receiver)?;
++    thread::sleep(MIN_EMIT_INTERVAL + Duration::from_millis(10));
++    reporter.observe_completion_delta("e");
++
++    let event = recv_json(&receiver)?;
++    assert_eq!(event["event"], "delta");
++    assert_eq!(event["estimated_tokens"], 2);
++    assert_eq!(event["utf8_bytes"], 5);
++    Ok(())
++}
++
++#[cfg(unix)]
++#[test]
++fn response_completion_flushes_once_and_includes_usage() -> Result<()> {
++    let (_temp_dir, path, receiver) = bound_receiver()?;
++    let usage = TokenUsage {
++        input_tokens: 10,
++        cached_input_tokens: 4,
++        output_tokens: 2,
++        reasoning_output_tokens: 1,
++        total_tokens: 13,
++    };
++    {
++        let mut reporter = reporter_for_path(path);
++        reporter.observe_completion_delta("abc");
++        reporter.response_completed(/*usage*/ Some(&usage), PostResponsePhase::Idle);
++        reporter.response_completed(/*usage*/ Some(&usage), PostResponsePhase::Idle);
++    }
++
++    let delta = recv_json(&receiver)?;
++    let completed = recv_json(&receiver)?;
++    assert_eq!(delta["estimated_tokens"], 1);
++    assert_eq!(completed["event"], "response_completed");
++    assert_eq!(completed["usage"], serde_json::to_value(usage)?);
++    assert_no_datagram(&receiver)?;
++    Ok(())
++}
++
++#[cfg(unix)]
++#[test]
++fn tool_execution_lifecycle_is_emitted_once() -> Result<()> {
++    let (_temp_dir, path, receiver) = bound_receiver()?;
++    {
++        let mut reporter = reporter_for_path(path);
++        reporter.observe_completion_delta(&"x".repeat(32));
++        reporter.response_completed(/*usage*/ None, PostResponsePhase::ToolExecution);
++        reporter.tool_execution_completed();
++        reporter.tool_execution_completed();
++    }
++
++    let delta = recv_json(&receiver)?;
++    let completed = recv_json(&receiver)?;
++    let tool_completed = recv_json(&receiver)?;
++    assert_eq!(delta["kind"], "completion_output");
++    assert_eq!(completed["next_phase"], "tool_execution");
++    assert_eq!(tool_completed["event"], "tool_execution_completed");
++    assert_eq!(tool_completed["stream_id"], completed["stream_id"]);
++    assert_no_datagram(&receiver)?;
++    Ok(())
++}
++
++#[cfg(unix)]
++#[test]
++fn dropping_reporter_completes_active_tool_execution() -> Result<()> {
++    let (_temp_dir, path, receiver) = bound_receiver()?;
++    {
++        let mut reporter = reporter_for_path(path);
++        reporter.observe_completion_delta(&"x".repeat(32));
++        reporter.response_completed(/*usage*/ None, PostResponsePhase::ToolExecution);
++    }
++
++    let _delta = recv_json(&receiver)?;
++    let _completed = recv_json(&receiver)?;
++    assert_eq!(recv_json(&receiver)?["event"], "tool_execution_completed");
++    assert_no_datagram(&receiver)?;
++    Ok(())
++}
++
++#[cfg(unix)]
++#[test]
++fn sender_recovers_when_receiver_starts_later() -> Result<()> {
++    let temp_dir = TempDir::new()?;
++    let path = temp_dir.path().join("late.sock");
++    let mut reporter = reporter_for_path(path.clone());
++
++    reporter.observe_completion_delta(&"a".repeat(32));
++    let receiver = UnixDatagram::bind(path)?;
++    receiver.set_read_timeout(Some(Duration::from_millis(200)))?;
++    reporter.observe_completion_delta(&"b".repeat(32));
++
++    let event = recv_json(&receiver)?;
++    assert_eq!(event["event"], "delta");
++    assert_eq!(event["estimated_tokens"], 8);
++    assert_eq!(event["utf8_bytes"], 32);
++    Ok(())
++}
++
++#[cfg(unix)]
++#[test]
++fn serialized_events_do_not_contain_delta_text() -> Result<()> {
++    let (_temp_dir, path, receiver) = bound_receiver()?;
++    let secret = "PRIVATE_MODEL_OUTPUT_0123456789";
++    let mut reporter = reporter_for_path(path);
++    reporter.observe_completion_delta(secret);
++    reporter.response_completed(/*usage*/ None, PostResponsePhase::Idle);
++
++    let mut serialized = serde_json::to_string(&recv_json(&receiver)?)?;
++    serialized.push_str(&serde_json::to_string(&recv_json(&receiver)?)?);
++    assert!(!serialized.contains(secret));
++    Ok(())
++}
++
++#[cfg(unix)]
++fn completed_event(chunks: &[&str]) -> Result<Value> {
++    let (_temp_dir, path, receiver) = bound_receiver()?;
++    let mut reporter = reporter_for_path(path);
++    for chunk in chunks {
++        reporter.observe_completion_delta(chunk);
++    }
++    reporter.response_completed(/*usage*/ None, PostResponsePhase::Idle);
++
++    loop {
++        let event = recv_json(&receiver)?;
++        if event["event"] == "response_completed" {
++            return Ok(event);
++        }
++    }
++}
++
++#[cfg(unix)]
++fn bound_receiver() -> Result<(TempDir, PathBuf, UnixDatagram)> {
++    let temp_dir = TempDir::new()?;
++    let path = temp_dir.path().join("token-rate.sock");
++    let receiver = UnixDatagram::bind(&path)?;
++    receiver.set_read_timeout(Some(Duration::from_millis(200)))?;
++    Ok((temp_dir, path, receiver))
++}
++
++#[cfg(unix)]
++fn reporter_for_path(path: PathBuf) -> LiveTokenRateReporter {
++    LiveTokenRateReporter::from_socket_path(Some(path), "session", "turn", "model")
++}
++
++#[cfg(unix)]
++fn recv_json(receiver: &UnixDatagram) -> Result<Value> {
++    let mut buffer = [0_u8; 4096];
++    let size = receiver.recv(&mut buffer)?;
++    Ok(serde_json::from_slice(&buffer[..size])?)
++}
++
++#[cfg(unix)]
++fn assert_no_datagram(receiver: &UnixDatagram) -> Result<()> {
++    let mut buffer = [0_u8; 64];
++    match receiver.recv(&mut buffer) {
++        Err(err) if matches!(err.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => Ok(()),
++        Err(err) => Err(err.into()),
++        Ok(size) => Err(anyhow!("unexpected datagram with {size} bytes")),
++    }
++}
+diff --git a/codex-rs/core/src/session/turn.rs b/codex-rs/core/src/session/turn.rs
+index bafb368b32d263c117cb0a26655dee7bf877ff9a..faef5d17a08f152640a4bfde03696f17b65d7d23 100644
+--- a/codex-rs/core/src/session/turn.rs
++++ b/codex-rs/core/src/session/turn.rs
+@@ -27,6 +27,8 @@ use crate::hook_runtime::run_turn_stop_hooks;
+ use crate::injection::ToolMentionKind;
+ use crate::injection::app_id_from_path;
+ use crate::injection::tool_kind_for_path;
++use crate::live_token_rate::LiveTokenRateReporter;
++use crate::live_token_rate::PostResponsePhase;
+ use crate::mcp_skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
+ use crate::mcp_tool_exposure::build_mcp_tool_exposure;
+ use crate::mentions::build_connector_slug_counts;
+@@ -1997,6 +1999,12 @@ async fn try_run_sampling_request(
+     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
+     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
+     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
++    let mut live_token_rate_reporter = LiveTokenRateReporter::new(
++        turn_context.config.live_token_rate_socket.clone(),
++        &sess.thread_id,
++        &turn_context.sub_id,
++        &turn_context.model_info.slug,
++    );
+     let defer_streamed_turn_items_for_contributors =
+         !sess.services.extensions.turn_item_contributors().is_empty();
+     let mut active_item_is_streaming_to_client = false;
+@@ -2281,6 +2289,13 @@ async fn try_run_sampling_request(
+                 end_turn,
+                 ..
+             } => {
++                let next_phase = if in_flight.is_empty() {
++                    PostResponsePhase::Idle
++                } else {
++                    PostResponsePhase::ToolExecution
++                };
++                live_token_rate_reporter
++                    .response_completed(/*usage*/ token_usage.as_ref(), next_phase);
+                 flush_assistant_text_segments_all(
+                     &sess,
+                     &turn_context,
+@@ -2311,6 +2326,7 @@ async fn try_run_sampling_request(
+                     if !active_item_is_streaming_to_client {
+                         continue;
+                     }
++                    live_token_rate_reporter.observe_completion_delta(&delta);
+                     let item_id = active.id();
+                     if matches!(active, TurnItem::AgentMessage(_)) {
+                         let parsed = assistant_message_stream_parsers.parse_delta(&item_id, &delta);
+@@ -2341,6 +2357,7 @@ async fn try_run_sampling_request(
+                 call_id,
+                 delta,
+             } => {
++                live_token_rate_reporter.observe_completion_delta(&delta);
+                 let Some((active_call_id, consumer)) = active_tool_argument_diff_consumer.as_mut()
+                 else {
+                     continue;
+@@ -2468,7 +2485,9 @@ async fn try_run_sampling_request(
+     } else {
+         Some(turn_context.turn_timing_state.begin_tool_blocking())
+     };
+-    drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
++    let tool_result = drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await;
++    live_token_rate_reporter.tool_execution_completed();
++    tool_result?;
+     drop(tool_blocking_timing_guard);
+ 
+     if should_emit_token_count {
+diff --git a/codex-rs/core/src/test_support.rs b/codex-rs/core/src/test_support.rs
+index 8c84330857261ff986ff0ff2ea206f71887d4394..0297a5ba8a6a13da2fa5a9d006fc87b73fc233fb 100644
+--- a/codex-rs/core/src/test_support.rs
++++ b/codex-rs/core/src/test_support.rs
+@@ -65,6 +65,10 @@ pub fn set_deterministic_process_ids(enabled: bool) {
+     unified_exec::set_deterministic_process_ids_for_tests(enabled);
+ }
+ 
++pub fn set_live_token_rate_socket(config: &mut Config, socket_path: PathBuf) {
++    config.live_token_rate_socket = Some(socket_path);
++}
++
+ pub fn auth_manager_from_auth(auth: CodexAuth) -> Arc<AuthManager> {
+     AuthManager::from_auth_for_testing(auth)
+ }
+diff --git a/codex-rs/core/tests/suite/live_token_rate.rs b/codex-rs/core/tests/suite/live_token_rate.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..df4fed7a9e5744427c5f7d8a86195f03647c0a7c
+--- /dev/null
++++ b/codex-rs/core/tests/suite/live_token_rate.rs
+@@ -0,0 +1,116 @@
++use std::io;
++use std::os::unix::net::UnixDatagram;
++use std::time::Duration;
++
++use anyhow::Context;
++use anyhow::Result;
++use codex_utils_output_truncation::approx_tokens_from_byte_count;
++use core_test_support::responses;
++use core_test_support::test_codex::test_codex;
++use pretty_assertions::assert_eq;
++use serde_json::Value;
++use serde_json::json;
++use tempfile::TempDir;
++
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn streamed_function_arguments_emit_rate_and_tool_lifecycle() -> Result<()> {
++    let server = responses::start_mock_server().await;
++    let call_id = "rate-update-plan";
++    let arguments = json!({
++        "plan": [{
++            "step": "observe streamed tool argument rate",
++            "status": "in_progress"
++        }]
++    })
++    .to_string();
++    responses::mount_sse_sequence(
++        &server,
++        vec![
++            responses::sse(vec![
++                responses::ev_response_created("resp-tool"),
++                json!({
++                    "type": "response.output_item.added",
++                    "item": {
++                        "type": "function_call",
++                        "id": "fc-rate-update-plan",
++                        "call_id": call_id,
++                        "name": "update_plan",
++                        "arguments": "",
++                        "status": "in_progress"
++                    }
++                }),
++                json!({
++                    "type": "response.function_call_arguments.delta",
++                    "item_id": "fc-rate-update-plan",
++                    "delta": &arguments,
++                }),
++                responses::ev_function_call(call_id, "update_plan", &arguments),
++                responses::ev_completed("resp-tool"),
++            ]),
++            responses::sse(vec![
++                responses::ev_assistant_message("msg-final", "done"),
++                responses::ev_completed("resp-final"),
++            ]),
++        ],
++    )
++    .await;
++
++    let socket_dir = TempDir::new()?;
++    let socket_path = socket_dir.path().join("rate.sock");
++    let receiver = UnixDatagram::bind(&socket_path)?;
++    receiver.set_read_timeout(Some(Duration::from_millis(500)))?;
++    let mut builder = test_codex().with_config(move |config| {
++        codex_core::test_support::set_live_token_rate_socket(config, socket_path);
++    });
++    let test = builder.build_with_auto_env(&server).await?;
++    test.submit_turn("exercise token rate").await?;
++
++    let events = receive_events(&receiver)?;
++    let delta = events
++        .iter()
++        .find(|event| event["event"] == "delta")
++        .context("missing completion delta event")?;
++    let stream_id = delta["stream_id"]
++        .as_str()
++        .context("delta missing stream id")?;
++    let stream_events = events
++        .iter()
++        .filter(|event| event["stream_id"] == stream_id)
++        .map(|event| event["event"].as_str().unwrap_or_default())
++        .collect::<Vec<_>>();
++    assert_eq!(
++        stream_events,
++        vec!["delta", "response_completed", "tool_execution_completed"]
++    );
++    assert_eq!(delta["kind"], "completion_output");
++    assert_eq!(delta["utf8_bytes"], json!(arguments.len()));
++    assert_eq!(
++        delta["estimated_tokens"],
++        json!(approx_tokens_from_byte_count(arguments.len()))
++    );
++    let completed = events
++        .iter()
++        .find(|event| event["event"] == "response_completed" && event["stream_id"] == stream_id)
++        .context("missing response completion event")?;
++    assert_eq!(completed["next_phase"], "tool_execution");
++    Ok(())
++}
++
++fn receive_events(receiver: &UnixDatagram) -> Result<Vec<Value>> {
++    let mut events = Vec::new();
++    let mut buffer = [0_u8; 16 * 1024];
++    loop {
++        match receiver.recv(&mut buffer) {
++            Ok(size) => events.push(serde_json::from_slice(&buffer[..size])?),
++            Err(err)
++                if matches!(
++                    err.kind(),
++                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
++                ) =>
++            {
++                return Ok(events);
++            }
++            Err(err) => return Err(err.into()),
++        }
++    }
++}
+diff --git a/codex-rs/core/tests/suite/mod.rs b/codex-rs/core/tests/suite/mod.rs
+index f1fae54c3bdca99599b2c57afe05dd1e7c91b6e3..5db39944eba63c577a3d8dcb67aa75ae92cd7123 100644
+--- a/codex-rs/core/tests/suite/mod.rs
++++ b/codex-rs/core/tests/suite/mod.rs
+@@ -67,6 +67,8 @@ mod image_rollout;
+ mod items;
+ mod json_result;
+ mod live_cli;
++#[cfg(unix)]
++mod live_token_rate;
+ mod mcp_auth_elicitation;
+ mod mcp_auth_refresh;
+ #[cfg(unix)]
+diff --git a/codex-rs/token-rate-daemon/BUILD.bazel b/codex-rs/token-rate-daemon/BUILD.bazel
+new file mode 100644
+index 0000000000000000000000000000000000000000..b2f782118af19f74a518669424a59a5e772f3fe8
+--- /dev/null
++++ b/codex-rs/token-rate-daemon/BUILD.bazel
+@@ -0,0 +1,6 @@
++load("//:defs.bzl", "codex_rust_crate")
++
++codex_rust_crate(
++    name = "token-rate-daemon",
++    crate_name = "codex_token_rate_daemon",
++)
+diff --git a/codex-rs/token-rate-daemon/Cargo.toml b/codex-rs/token-rate-daemon/Cargo.toml
+new file mode 100644
+index 0000000000000000000000000000000000000000..c0a9dbfa198d161e8a70deadb88549b6d6e42d2d
+--- /dev/null
++++ b/codex-rs/token-rate-daemon/Cargo.toml
+@@ -0,0 +1,33 @@
++[package]
++name = "codex-token-rate-daemon"
++version.workspace = true
++edition.workspace = true
++license.workspace = true
++
++[[bin]]
++name = "codex-token-rate-daemon"
++path = "src/main.rs"
++
++[lints]
++workspace = true
++
++[dependencies]
++anyhow = { workspace = true }
++clap = { workspace = true, features = ["derive"] }
++serde = { workspace = true, features = ["derive"] }
++serde_json = { workspace = true }
++tokio = { workspace = true, features = [
++    "macros",
++    "net",
++    "rt-multi-thread",
++    "signal",
++    "time",
++] }
++
++[target.'cfg(unix)'.dependencies]
++libc = { workspace = true }
++
++[dev-dependencies]
++codex-utils-cargo-bin = { workspace = true }
++pretty_assertions = { workspace = true }
++tempfile = { workspace = true }
+diff --git a/codex-rs/token-rate-daemon/README.md b/codex-rs/token-rate-daemon/README.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..a2153d4d5553ab860d853eef7e14aaff2ba72e7a
+--- /dev/null
++++ b/codex-rs/token-rate-daemon/README.md
+@@ -0,0 +1,48 @@
++# Codex live token-rate patch
++
++This local-only patch reports the estimated completion-output rate across every patched Codex
++process using the same Unix datagram socket. User-visible assistant text and streamed tool
++arguments are included; input tokens, hidden reasoning, and tool output are not. Exact usage is
++emitted only when a model response completes.
++
++When a response starts executing tools, the daemon holds that stream's last estimated rate after
++the normal sliding window expires. The held rate is released when all tools from the response
++finish. `tool_active_streams` in the state file reports how many stream rates are currently held.
++
++Build and install from the repository root:
++
++```bash
++cd codex-rs
++cargo build --release --bin codex
++cargo build --release --bin codex-token-rate-daemon
++cd ..
++scripts/install-patched-codex.sh
++```
++
++Start the daemon:
++
++```bash
++SOCKET_PATH="${TMPDIR:-/tmp}/codex-token-rate.sock"
++STATE_FILE="${TMPDIR:-/tmp}/codex-token-rate.json"
++
++~/.local/bin/codex-token-rate-daemon \
++  --socket "$SOCKET_PATH" \
++  --state-file "$STATE_FILE" \
++  --stdout
++```
++
++Start one or more patched Codex sessions in other terminals:
++
++```bash
++export CODEX_TOKEN_RATE_SOCKET="${TMPDIR:-/tmp}/codex-token-rate.sock"
++~/.local/bin/codex-patched
++```
++
++The state file contains the already-aggregated global rate:
++
++```bash
++cat "${TMPDIR:-/tmp}/codex-token-rate.json"
++```
++
++Unset `CODEX_TOKEN_RATE_SOCKET` to disable reporting completely. The sender is nonblocking and
++silently drops events when the daemon is absent.
+diff --git a/codex-rs/token-rate-daemon/src/aggregation.rs b/codex-rs/token-rate-daemon/src/aggregation.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..53f5a0f7d155067f9e4c767585c731b530579050
+--- /dev/null
++++ b/codex-rs/token-rate-daemon/src/aggregation.rs
+@@ -0,0 +1,198 @@
++use std::collections::HashMap;
++use std::collections::HashSet;
++use std::collections::VecDeque;
++use std::time::Duration;
++use std::time::Instant;
++
++use serde::Deserialize;
++
++#[derive(Debug, PartialEq)]
++pub(super) struct AggregateSnapshot {
++    pub(super) tokens_per_second: f64,
++    pub(super) raw_tokens_per_second: f64,
++    pub(super) active_sessions: usize,
++    pub(super) active_streams: usize,
++    pub(super) tool_active_streams: usize,
++}
++
++pub(super) struct Aggregator {
++    window: Duration,
++    samples: VecDeque<TokenSample>,
++    held_tool_rates: HashMap<StreamKey, f64>,
++    smoothed_tokens_per_second: f64,
++}
++
++struct TokenSample {
++    received_at: Instant,
++    estimated_tokens: u64,
++    key: StreamKey,
++}
++
++#[derive(Debug, Clone, PartialEq, Eq, Hash)]
++struct StreamKey {
++    session_id: String,
++    stream_id: String,
++}
++
++#[derive(Debug, Deserialize, PartialEq, Eq)]
++pub(super) struct DeltaMessage {
++    #[serde(rename = "pid")]
++    pub(super) _pid: u32,
++    pub(super) session_id: String,
++    pub(super) stream_id: String,
++    pub(super) estimated_tokens: u64,
++}
++
++#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
++#[serde(rename_all = "snake_case")]
++pub(super) enum PostResponsePhase {
++    #[default]
++    Idle,
++    ToolExecution,
++}
++
++#[derive(Debug, Deserialize, PartialEq, Eq)]
++pub(super) struct ResponseCompletedMessage {
++    #[serde(rename = "pid")]
++    pub(super) _pid: u32,
++    pub(super) session_id: String,
++    pub(super) stream_id: String,
++    #[serde(default)]
++    pub(super) next_phase: PostResponsePhase,
++}
++
++#[derive(Debug, Deserialize, PartialEq, Eq)]
++pub(super) struct ToolExecutionCompletedMessage {
++    #[serde(rename = "pid")]
++    pub(super) _pid: u32,
++    pub(super) session_id: String,
++    pub(super) stream_id: String,
++}
++
++impl Aggregator {
++    pub(super) fn new(window: Duration) -> Self {
++        Self {
++            window,
++            samples: VecDeque::new(),
++            held_tool_rates: HashMap::new(),
++            smoothed_tokens_per_second: 0.0,
++        }
++    }
++
++    pub(super) fn record(&mut self, received_at: Instant, delta: DeltaMessage) {
++        self.held_tool_rates
++            .retain(|key, _| key.session_id != delta.session_id);
++        self.samples.push_back(TokenSample {
++            received_at,
++            estimated_tokens: delta.estimated_tokens,
++            key: StreamKey {
++                session_id: delta.session_id,
++                stream_id: delta.stream_id,
++            },
++        });
++    }
++
++    pub(super) fn response_completed(
++        &mut self,
++        received_at: Instant,
++        completed: ResponseCompletedMessage,
++    ) {
++        let key = StreamKey {
++            session_id: completed.session_id,
++            stream_id: completed.stream_id,
++        };
++        match completed.next_phase {
++            PostResponsePhase::Idle => {
++                self.held_tool_rates.remove(&key);
++            }
++            PostResponsePhase::ToolExecution => {
++                self.expire_samples(received_at);
++                let estimated_tokens = self
++                    .samples
++                    .iter()
++                    .filter(|sample| sample.key == key)
++                    .fold(0_u64, |total, sample| {
++                        total.saturating_add(sample.estimated_tokens)
++                    });
++                self.samples.retain(|sample| sample.key != key);
++                self.held_tool_rates
++                    .insert(key, estimated_tokens as f64 / self.window.as_secs_f64());
++            }
++        }
++    }
++
++    pub(super) fn tool_execution_completed(&mut self, completed: ToolExecutionCompletedMessage) {
++        self.held_tool_rates.remove(&StreamKey {
++            session_id: completed.session_id,
++            stream_id: completed.stream_id,
++        });
++    }
++
++    pub(super) fn snapshot(&mut self, now: Instant, ema_alpha: f64) -> AggregateSnapshot {
++        self.expire_samples(now);
++
++        let live_tokens = self.samples.iter().fold(0_u64, |total, sample| {
++            total.saturating_add(sample.estimated_tokens)
++        });
++        let live_tokens_per_second = live_tokens as f64 / self.window.as_secs_f64();
++        let held_tokens_per_second = self.held_tool_rates.values().sum::<f64>();
++        let raw_tokens_per_second = live_tokens_per_second + held_tokens_per_second;
++        self.smoothed_tokens_per_second = if !self.samples.is_empty() {
++            ema_alpha * raw_tokens_per_second + (1.0 - ema_alpha) * self.smoothed_tokens_per_second
++        } else if !self.held_tool_rates.is_empty() {
++            raw_tokens_per_second
++        } else {
++            0.0
++        };
++        let active_sessions = self
++            .samples
++            .iter()
++            .map(|sample| sample.key.session_id.as_str())
++            .chain(
++                self.held_tool_rates
++                    .keys()
++                    .map(|key| key.session_id.as_str()),
++            )
++            .collect::<HashSet<_>>()
++            .len();
++        let active_streams = self
++            .samples
++            .iter()
++            .map(|sample| {
++                (
++                    sample.key.session_id.as_str(),
++                    sample.key.stream_id.as_str(),
++                )
++            })
++            .chain(
++                self.held_tool_rates
++                    .keys()
++                    .map(|key| (key.session_id.as_str(), key.stream_id.as_str())),
++            )
++            .collect::<HashSet<_>>()
++            .len();
++
++        AggregateSnapshot {
++            tokens_per_second: self.smoothed_tokens_per_second,
++            raw_tokens_per_second,
++            active_sessions,
++            active_streams,
++            tool_active_streams: self.held_tool_rates.len(),
++        }
++    }
++
++    fn expire_samples(&mut self, now: Instant) {
++        let cutoff = now.checked_sub(self.window).unwrap_or(now);
++        while self
++            .samples
++            .front()
++            .is_some_and(|sample| sample.received_at < cutoff)
++        {
++            self.samples.pop_front();
++        }
++    }
++}
++
++#[cfg(test)]
++#[path = "aggregation_tests.rs"]
++mod tests;
+diff --git a/codex-rs/token-rate-daemon/src/aggregation_tests.rs b/codex-rs/token-rate-daemon/src/aggregation_tests.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..445f9f85c93728ffee8202bbe8fa1ba8abe86c31
+--- /dev/null
++++ b/codex-rs/token-rate-daemon/src/aggregation_tests.rs
+@@ -0,0 +1,222 @@
++use super::*;
++use pretty_assertions::assert_eq;
++
++#[test]
++fn aggregates_single_process_tokens() {
++    let start = Instant::now();
++    let mut aggregator = Aggregator::new(Duration::from_secs(2));
++    aggregator.record(
++        start,
++        delta(
++            /*pid*/ 10,
++            "session-a",
++            "stream-a",
++            /*estimated_tokens*/ 10,
++        ),
++    );
++
++    assert_eq!(
++        aggregator.snapshot(start, /*ema_alpha*/ 1.0),
++        AggregateSnapshot {
++            tokens_per_second: 5.0,
++            raw_tokens_per_second: 5.0,
++            active_sessions: 1,
++            active_streams: 1,
++            tool_active_streams: 0,
++        }
++    );
++}
++
++#[test]
++fn aggregates_processes_sessions_and_streams_globally() {
++    let start = Instant::now();
++    let mut aggregator = Aggregator::new(Duration::from_secs(2));
++    aggregator.record(
++        start,
++        delta(
++            /*pid*/ 10,
++            "session-a",
++            "stream-a",
++            /*estimated_tokens*/ 4,
++        ),
++    );
++    aggregator.record(
++        start,
++        delta(
++            /*pid*/ 20,
++            "session-b",
++            "stream-b",
++            /*estimated_tokens*/ 6,
++        ),
++    );
++    aggregator.record(
++        start,
++        delta(
++            /*pid*/ 20,
++            "session-b",
++            "stream-c",
++            /*estimated_tokens*/ 2,
++        ),
++    );
++
++    assert_eq!(
++        aggregator.snapshot(start, /*ema_alpha*/ 1.0),
++        AggregateSnapshot {
++            tokens_per_second: 6.0,
++            raw_tokens_per_second: 6.0,
++            active_sessions: 2,
++            active_streams: 3,
++            tool_active_streams: 0,
++        }
++    );
++}
++
++#[test]
++fn sliding_window_expires_and_idle_rate_returns_to_zero() {
++    let start = Instant::now();
++    let mut aggregator = Aggregator::new(Duration::from_secs(2));
++    aggregator.record(
++        start,
++        delta(
++            /*pid*/ 10, "session", "stream", /*estimated_tokens*/ 8,
++        ),
++    );
++    let _ = aggregator.snapshot(start, /*ema_alpha*/ 0.35);
++
++    assert_eq!(
++        aggregator.snapshot(start + Duration::from_millis(2001), /*ema_alpha*/ 0.35,),
++        AggregateSnapshot {
++            tokens_per_second: 0.0,
++            raw_tokens_per_second: 0.0,
++            active_sessions: 0,
++            active_streams: 0,
++            tool_active_streams: 0,
++        }
++    );
++}
++
++#[test]
++fn tool_execution_holds_last_rate_until_completion() {
++    let start = Instant::now();
++    let mut aggregator = Aggregator::new(Duration::from_secs(2));
++    aggregator.record(
++        start,
++        delta(
++            /*pid*/ 10, "session", "stream", /*estimated_tokens*/ 8,
++        ),
++    );
++    aggregator.response_completed(
++        start,
++        response_completed("session", "stream", PostResponsePhase::ToolExecution),
++    );
++
++    assert_eq!(
++        aggregator.snapshot(start + Duration::from_secs(30), /*ema_alpha*/ 0.35),
++        AggregateSnapshot {
++            tokens_per_second: 4.0,
++            raw_tokens_per_second: 4.0,
++            active_sessions: 1,
++            active_streams: 1,
++            tool_active_streams: 1,
++        }
++    );
++
++    aggregator.tool_execution_completed(tool_execution_completed("session", "stream"));
++    assert_eq!(
++        aggregator.snapshot(start + Duration::from_secs(30), /*ema_alpha*/ 0.35),
++        AggregateSnapshot {
++            tokens_per_second: 0.0,
++            raw_tokens_per_second: 0.0,
++            active_sessions: 0,
++            active_streams: 0,
++            tool_active_streams: 0,
++        }
++    );
++}
++
++#[test]
++fn new_stream_delta_clears_stale_tool_hold_for_session() {
++    let start = Instant::now();
++    let mut aggregator = Aggregator::new(Duration::from_secs(2));
++    aggregator.record(
++        start,
++        delta(
++            /*pid*/ 10,
++            "session",
++            "old-stream",
++            /*estimated_tokens*/ 8,
++        ),
++    );
++    aggregator.response_completed(
++        start,
++        response_completed("session", "old-stream", PostResponsePhase::ToolExecution),
++    );
++    aggregator.record(
++        start + Duration::from_secs(30),
++        delta(
++            /*pid*/ 10,
++            "session",
++            "new-stream",
++            /*estimated_tokens*/ 4,
++        ),
++    );
++
++    assert_eq!(
++        aggregator.snapshot(start + Duration::from_secs(30), /*ema_alpha*/ 1.0),
++        AggregateSnapshot {
++            tokens_per_second: 2.0,
++            raw_tokens_per_second: 2.0,
++            active_sessions: 1,
++            active_streams: 1,
++            tool_active_streams: 0,
++        }
++    );
++}
++
++#[test]
++fn ema_uses_previous_smoothed_value() {
++    let start = Instant::now();
++    let mut aggregator = Aggregator::new(Duration::from_secs(2));
++    aggregator.record(
++        start,
++        delta(
++            /*pid*/ 10, "session", "stream", /*estimated_tokens*/ 10,
++        ),
++    );
++
++    let first = aggregator.snapshot(start, /*ema_alpha*/ 0.35);
++    let second = aggregator.snapshot(start, /*ema_alpha*/ 0.35);
++    assert_eq!(first.tokens_per_second, 1.75);
++    assert_eq!(second.tokens_per_second, 2.8875);
++    assert_eq!(second.raw_tokens_per_second, 5.0);
++}
++
++fn delta(pid: u32, session_id: &str, stream_id: &str, estimated_tokens: u64) -> DeltaMessage {
++    DeltaMessage {
++        _pid: pid,
++        session_id: session_id.to_string(),
++        stream_id: stream_id.to_string(),
++        estimated_tokens,
++    }
++}
++
++fn response_completed(
++    session_id: &str,
++    stream_id: &str,
++    next_phase: PostResponsePhase,
++) -> ResponseCompletedMessage {
++    ResponseCompletedMessage {
++        _pid: 10,
++        session_id: session_id.to_string(),
++        stream_id: stream_id.to_string(),
++        next_phase,
++    }
++}
++
++fn tool_execution_completed(session_id: &str, stream_id: &str) -> ToolExecutionCompletedMessage {
++    ToolExecutionCompletedMessage {
++        _pid: 10,
++        session_id: session_id.to_string(),
++        stream_id: stream_id.to_string(),
++    }
++}
+diff --git a/codex-rs/token-rate-daemon/src/daemon.rs b/codex-rs/token-rate-daemon/src/daemon.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..e070f799ee613f6cf76283e3828b0c3d0f04f097
+--- /dev/null
++++ b/codex-rs/token-rate-daemon/src/daemon.rs
+@@ -0,0 +1,474 @@
++use std::ffi::OsString;
++use std::fs;
++use std::fs::OpenOptions;
++use std::io;
++use std::io::Write;
++use std::os::unix::fs::FileTypeExt;
++use std::os::unix::fs::MetadataExt;
++use std::os::unix::fs::OpenOptionsExt;
++use std::os::unix::fs::PermissionsExt;
++use std::os::unix::net::UnixDatagram as StdUnixDatagram;
++use std::path::Path;
++use std::path::PathBuf;
++use std::sync::atomic::AtomicU64;
++use std::sync::atomic::Ordering;
++use std::time::Duration;
++use std::time::Instant;
++use std::time::SystemTime;
++use std::time::UNIX_EPOCH;
++
++use anyhow::Context;
++use anyhow::Result;
++use anyhow::bail;
++use clap::Parser;
++use serde::Deserialize;
++use serde::Serialize;
++use tokio::net::UnixDatagram;
++use tokio::time::MissedTickBehavior;
++
++use crate::aggregation::Aggregator;
++use crate::aggregation::DeltaMessage;
++use crate::aggregation::ResponseCompletedMessage;
++use crate::aggregation::ToolExecutionCompletedMessage;
++
++const PROTOCOL_VERSION: u64 = 1;
++const METRIC_NAME: &str = "completion_output_tokens_per_second";
++const MAX_DATAGRAM_BYTES: usize = 16 * 1024;
++const MAX_ID_BYTES: usize = 512;
++const WARNING_INTERVAL: Duration = Duration::from_secs(5);
++
++static NEXT_STATE_TEMP_FILE: AtomicU64 = AtomicU64::new(1);
++
++#[derive(Debug, Parser)]
++#[command(name = "codex-token-rate-daemon", version)]
++pub(crate) struct Args {
++    #[arg(long, value_name = "PATH")]
++    socket: Option<PathBuf>,
++
++    #[arg(long, value_name = "PATH")]
++    state_file: Option<PathBuf>,
++
++    #[arg(long, default_value_t = 2000)]
++    window_ms: u64,
++
++    #[arg(long, default_value_t = 200)]
++    refresh_ms: u64,
++
++    #[arg(long, default_value_t = 0.35, value_parser = parse_ema_alpha)]
++    ema_alpha: f64,
++
++    #[arg(long)]
++    stdout: bool,
++}
++
++struct Config {
++    socket_path: PathBuf,
++    state_file: PathBuf,
++    window: Duration,
++    refresh: Duration,
++    ema_alpha: f64,
++    stdout: bool,
++}
++
++#[derive(Debug, Clone, PartialEq, Serialize)]
++struct StateFile {
++    version: u8,
++    metric: &'static str,
++    estimated: bool,
++    tokens_per_second: f64,
++    raw_tokens_per_second: f64,
++    active_sessions: usize,
++    active_streams: usize,
++    tool_active_streams: usize,
++    window_ms: u64,
++    updated_at_unix_ms: u64,
++}
++
++#[derive(Deserialize)]
++struct MessageEnvelope {
++    v: u64,
++    event: String,
++}
++
++#[derive(Debug, PartialEq, Eq)]
++enum ParsedDatagram {
++    Delta(DeltaMessage),
++    ResponseCompleted(ResponseCompletedMessage),
++    ToolExecutionCompleted(ToolExecutionCompletedMessage),
++    Ignored(IgnoreReason),
++}
++
++#[derive(Debug, PartialEq, Eq)]
++enum IgnoreReason {
++    Malformed,
++    UnsupportedVersion,
++    UnknownEvent,
++}
++
++struct WarningLimiter {
++    next_allowed_at: Option<Instant>,
++}
++
++struct SocketPathGuard {
++    path: PathBuf,
++    device: u64,
++    inode: u64,
++}
++
++struct TempPathGuard {
++    path: Option<PathBuf>,
++}
++
++pub(crate) async fn run(args: Args) -> Result<()> {
++    let config = Config::try_from(args)?;
++    prepare_socket_path(&config.socket_path)?;
++    let socket = UnixDatagram::bind(&config.socket_path)
++        .with_context(|| format!("socket bind failed: {}", config.socket_path.display()))?;
++    let socket_guard = SocketPathGuard::new(config.socket_path.clone())?;
++    fs::set_permissions(&config.socket_path, fs::Permissions::from_mode(0o600))?;
++
++    let mut aggregator = Aggregator::new(config.window);
++    let mut refresh = tokio::time::interval(config.refresh);
++    refresh.set_missed_tick_behavior(MissedTickBehavior::Skip);
++    let mut protocol_warning = WarningLimiter::new();
++    let mut state_warning = WarningLimiter::new();
++    let mut buffer = [0_u8; MAX_DATAGRAM_BYTES];
++    let shutdown = shutdown_signal();
++    tokio::pin!(shutdown);
++
++    loop {
++        tokio::select! {
++            _ = &mut shutdown => break,
++            result = socket.recv(&mut buffer) => {
++                match result {
++                    Ok(size) => handle_datagram(
++                        &buffer[..size],
++                        Instant::now(),
++                        &mut aggregator,
++                        &mut protocol_warning,
++                    ),
++                    Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
++                    Err(err) => return Err(err).context("socket receive failed"),
++                }
++            }
++            _ = refresh.tick() => {
++                let now = Instant::now();
++                let snapshot = aggregator.snapshot(now, config.ema_alpha);
++                let state = StateFile {
++                    version: 1,
++                    metric: METRIC_NAME,
++                    estimated: true,
++                    tokens_per_second: round_to_tenth(snapshot.tokens_per_second),
++                    raw_tokens_per_second: round_to_tenth(snapshot.raw_tokens_per_second),
++                    active_sessions: snapshot.active_sessions,
++                    active_streams: snapshot.active_streams,
++                    tool_active_streams: snapshot.tool_active_streams,
++                    window_ms: duration_millis(config.window),
++                    updated_at_unix_ms: unix_timestamp_ms(),
++                };
++                if let Err(err) = write_state_atomically(&config.state_file, &state) {
++                    state_warning.warn(now, &format!("state file write failed: {err}"));
++                }
++                if config.stdout {
++                    println!(
++                        "≈ {:.1} tok/s | sessions {} | streams {} | tools {}",
++                        state.tokens_per_second,
++                        state.active_sessions,
++                        state.active_streams,
++                        state.tool_active_streams,
++                    );
++                }
++            }
++        }
++    }
++
++    drop(socket_guard);
++    Ok(())
++}
++
++impl TryFrom<Args> for Config {
++    type Error = anyhow::Error;
++
++    fn try_from(args: Args) -> Result<Self> {
++        if args.window_ms == 0 {
++            bail!("--window-ms must be greater than zero");
++        }
++        if args.refresh_ms == 0 {
++            bail!("--refresh-ms must be greater than zero");
++        }
++        if !valid_ema_alpha(args.ema_alpha) {
++            bail!("--ema-alpha must be greater than zero and at most one");
++        }
++        let socket_path = args
++            .socket
++            .unwrap_or_else(|| std::env::temp_dir().join("codex-token-rate.sock"));
++        if !socket_path.is_absolute() {
++            bail!("socket path must be absolute: {}", socket_path.display());
++        }
++        Ok(Self {
++            socket_path,
++            state_file: args
++                .state_file
++                .unwrap_or_else(|| std::env::temp_dir().join("codex-token-rate.json")),
++            window: Duration::from_millis(args.window_ms),
++            refresh: Duration::from_millis(args.refresh_ms),
++            ema_alpha: args.ema_alpha,
++            stdout: args.stdout,
++        })
++    }
++}
++
++impl WarningLimiter {
++    fn new() -> Self {
++        Self {
++            next_allowed_at: None,
++        }
++    }
++
++    fn warn(&mut self, now: Instant, message: &str) {
++        if self.next_allowed_at.is_none_or(|next| now >= next) {
++            eprintln!("{message}");
++            self.next_allowed_at = Some(now + WARNING_INTERVAL);
++        }
++    }
++}
++
++impl SocketPathGuard {
++    fn new(path: PathBuf) -> io::Result<Self> {
++        let metadata = fs::symlink_metadata(&path)?;
++        Ok(Self {
++            path,
++            device: metadata.dev(),
++            inode: metadata.ino(),
++        })
++    }
++}
++
++impl Drop for SocketPathGuard {
++    fn drop(&mut self) {
++        if let Ok(metadata) = fs::symlink_metadata(&self.path)
++            && metadata.file_type().is_socket()
++            && metadata.dev() == self.device
++            && metadata.ino() == self.inode
++        {
++            let _ = fs::remove_file(&self.path);
++        }
++    }
++}
++
++impl TempPathGuard {
++    fn new(path: PathBuf) -> Self {
++        Self { path: Some(path) }
++    }
++
++    fn persist(mut self) {
++        self.path = None;
++    }
++}
++
++impl Drop for TempPathGuard {
++    fn drop(&mut self) {
++        if let Some(path) = self.path.as_ref() {
++            let _ = fs::remove_file(path);
++        }
++    }
++}
++
++fn handle_datagram(
++    datagram: &[u8],
++    received_at: Instant,
++    aggregator: &mut Aggregator,
++    warning: &mut WarningLimiter,
++) {
++    match parse_datagram(datagram) {
++        ParsedDatagram::Delta(delta) => aggregator.record(received_at, delta),
++        ParsedDatagram::ResponseCompleted(completed) => {
++            aggregator.response_completed(received_at, completed);
++        }
++        ParsedDatagram::ToolExecutionCompleted(completed) => {
++            aggregator.tool_execution_completed(completed);
++        }
++        ParsedDatagram::Ignored(IgnoreReason::UnknownEvent) => {}
++        ParsedDatagram::Ignored(IgnoreReason::Malformed) => {
++            warning.warn(received_at, "malformed datagram ignored");
++        }
++        ParsedDatagram::Ignored(IgnoreReason::UnsupportedVersion) => {
++            warning.warn(received_at, "unsupported protocol version");
++        }
++    }
++}
++
++fn parse_datagram(datagram: &[u8]) -> ParsedDatagram {
++    let Ok(envelope) = serde_json::from_slice::<MessageEnvelope>(datagram) else {
++        return ParsedDatagram::Ignored(IgnoreReason::Malformed);
++    };
++    if envelope.v != PROTOCOL_VERSION {
++        return ParsedDatagram::Ignored(IgnoreReason::UnsupportedVersion);
++    }
++    match envelope.event.as_str() {
++        "delta" => {
++            let Ok(delta) = serde_json::from_slice::<DeltaMessage>(datagram) else {
++                return ParsedDatagram::Ignored(IgnoreReason::Malformed);
++            };
++            if delta.estimated_tokens == 0 || !valid_stream_ids(&delta.session_id, &delta.stream_id)
++            {
++                ParsedDatagram::Ignored(IgnoreReason::Malformed)
++            } else {
++                ParsedDatagram::Delta(delta)
++            }
++        }
++        "response_completed" => {
++            let Ok(completed) = serde_json::from_slice::<ResponseCompletedMessage>(datagram) else {
++                return ParsedDatagram::Ignored(IgnoreReason::Malformed);
++            };
++            if valid_stream_ids(&completed.session_id, &completed.stream_id) {
++                ParsedDatagram::ResponseCompleted(completed)
++            } else {
++                ParsedDatagram::Ignored(IgnoreReason::Malformed)
++            }
++        }
++        "tool_execution_completed" => {
++            let Ok(completed) = serde_json::from_slice::<ToolExecutionCompletedMessage>(datagram)
++            else {
++                return ParsedDatagram::Ignored(IgnoreReason::Malformed);
++            };
++            if valid_stream_ids(&completed.session_id, &completed.stream_id) {
++                ParsedDatagram::ToolExecutionCompleted(completed)
++            } else {
++                ParsedDatagram::Ignored(IgnoreReason::Malformed)
++            }
++        }
++        _ => ParsedDatagram::Ignored(IgnoreReason::UnknownEvent),
++    }
++}
++
++fn valid_stream_ids(session_id: &str, stream_id: &str) -> bool {
++    !session_id.is_empty()
++        && session_id.len() <= MAX_ID_BYTES
++        && !stream_id.is_empty()
++        && stream_id.len() <= MAX_ID_BYTES
++}
++
++fn prepare_socket_path(path: &Path) -> Result<()> {
++    if !path.is_absolute() {
++        bail!("socket path must be absolute: {}", path.display());
++    }
++    let metadata = match fs::symlink_metadata(path) {
++        Ok(metadata) => metadata,
++        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
++        Err(err) => return Err(err.into()),
++    };
++    if !metadata.file_type().is_socket() {
++        bail!(
++            "socket path exists and is not a Unix socket: {}",
++            path.display()
++        );
++    }
++    // SAFETY: geteuid has no preconditions and does not retain pointers.
++    let current_uid = unsafe { libc::geteuid() };
++    if metadata.uid() != current_uid {
++        bail!(
++            "refusing to remove a socket owned by another user: {}",
++            path.display()
++        );
++    }
++
++    let probe = StdUnixDatagram::unbound()?;
++    match probe.connect(path) {
++        Ok(()) => bail!("socket is already in use: {}", path.display()),
++        Err(err) if is_stale_socket_error(&err) => {
++            fs::remove_file(path)?;
++            Ok(())
++        }
++        Err(err) => {
++            Err(err).with_context(|| format!("failed to inspect socket: {}", path.display()))
++        }
++    }
++}
++
++fn is_stale_socket_error(error: &io::Error) -> bool {
++    matches!(
++        error.kind(),
++        io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
++    )
++}
++
++fn write_state_atomically(path: &Path, state: &StateFile) -> io::Result<()> {
++    let temp_path = state_temp_path(path)?;
++    let temp_guard = TempPathGuard::new(temp_path.clone());
++    let mut file = OpenOptions::new()
++        .write(true)
++        .create_new(true)
++        .mode(0o600)
++        .open(&temp_path)?;
++    fs::set_permissions(&temp_path, fs::Permissions::from_mode(0o600))?;
++    serde_json::to_writer(&mut file, state).map_err(io::Error::other)?;
++    file.write_all(b"\n")?;
++    file.flush()?;
++    drop(file);
++    fs::rename(&temp_path, path)?;
++    temp_guard.persist();
++    Ok(())
++}
++
++fn state_temp_path(path: &Path) -> io::Result<PathBuf> {
++    let file_name = path.file_name().ok_or_else(|| {
++        io::Error::new(io::ErrorKind::InvalidInput, "state file has no file name")
++    })?;
++    let parent = path.parent().unwrap_or_else(|| Path::new("."));
++    let sequence = NEXT_STATE_TEMP_FILE.fetch_add(1, Ordering::Relaxed);
++    let mut temp_name = OsString::from(".");
++    temp_name.push(file_name);
++    temp_name.push(format!(".tmp-{}-{sequence}", std::process::id()));
++    Ok(parent.join(temp_name))
++}
++
++fn parse_ema_alpha(value: &str) -> std::result::Result<f64, String> {
++    let alpha = value
++        .parse::<f64>()
++        .map_err(|err| format!("invalid EMA alpha: {err}"))?;
++    if valid_ema_alpha(alpha) {
++        Ok(alpha)
++    } else {
++        Err("EMA alpha must be greater than zero and at most one".to_string())
++    }
++}
++
++fn valid_ema_alpha(alpha: f64) -> bool {
++    alpha.is_finite() && alpha != 0.0 && (0.0..=1.0).contains(&alpha)
++}
++
++fn round_to_tenth(value: f64) -> f64 {
++    (value * 10.0).round() / 10.0
++}
++
++fn duration_millis(duration: Duration) -> u64 {
++    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
++}
++
++fn unix_timestamp_ms() -> u64 {
++    let millis = SystemTime::now()
++        .duration_since(UNIX_EPOCH)
++        .unwrap_or_default()
++        .as_millis();
++    u64::try_from(millis).unwrap_or(u64::MAX)
++}
++
++async fn shutdown_signal() {
++    let ctrl_c = tokio::signal::ctrl_c();
++    match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
++        Ok(mut terminate) => {
++            tokio::select! {
++                _ = ctrl_c => {}
++                _ = terminate.recv() => {}
++            }
++        }
++        Err(_) => {
++            let _ = ctrl_c.await;
++        }
++    }
++}
++
++#[cfg(test)]
++#[path = "daemon_tests.rs"]
++mod tests;
+diff --git a/codex-rs/token-rate-daemon/src/daemon_tests.rs b/codex-rs/token-rate-daemon/src/daemon_tests.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..279949469698f4b1a903d8a8532b2e4b1bab2006
+--- /dev/null
++++ b/codex-rs/token-rate-daemon/src/daemon_tests.rs
+@@ -0,0 +1,129 @@
++use super::*;
++use crate::aggregation::PostResponsePhase;
++use anyhow::Result;
++use pretty_assertions::assert_eq;
++use serde_json::json;
++use std::os::unix::fs::PermissionsExt;
++use tempfile::TempDir;
++
++#[test]
++fn malformed_unknown_version_and_unknown_event_are_ignored() {
++    assert_eq!(
++        parse_datagram(b"not json"),
++        ParsedDatagram::Ignored(IgnoreReason::Malformed)
++    );
++    assert_eq!(
++        parse_datagram(br#"{"v":2,"event":"delta"}"#),
++        ParsedDatagram::Ignored(IgnoreReason::UnsupportedVersion)
++    );
++    assert_eq!(
++        parse_datagram(br#"{"v":1,"event":"future_event"}"#),
++        ParsedDatagram::Ignored(IgnoreReason::UnknownEvent)
++    );
++    assert_eq!(
++        parse_datagram(
++            br#"{"v":1,"event":"response_completed","pid":1,"session_id":"session","stream_id":"1-1","next_phase":"tool_execution"}"#,
++        ),
++        ParsedDatagram::ResponseCompleted(ResponseCompletedMessage {
++            _pid: 1,
++            session_id: "session".to_string(),
++            stream_id: "1-1".to_string(),
++            next_phase: PostResponsePhase::ToolExecution,
++        })
++    );
++    assert_eq!(
++        parse_datagram(
++            br#"{"v":1,"event":"tool_execution_completed","pid":1,"session_id":"session","stream_id":"1-1"}"#,
++        ),
++        ParsedDatagram::ToolExecutionCompleted(ToolExecutionCompletedMessage {
++            _pid: 1,
++            session_id: "session".to_string(),
++            stream_id: "1-1".to_string(),
++        })
++    );
++}
++
++#[test]
++fn parses_valid_delta_without_requiring_optional_protocol_fields() -> Result<()> {
++    let message = serde_json::to_vec(&json!({
++        "v": 1,
++        "event": "delta",
++        "pid": 42,
++        "session_id": "session",
++        "stream_id": "42-1",
++        "estimated_tokens": 7,
++        "future_field": true,
++    }))?;
++
++    assert_eq!(
++        parse_datagram(&message),
++        ParsedDatagram::Delta(delta(
++            /*pid*/ 42, "session", "42-1", /*estimated_tokens*/ 7,
++        ))
++    );
++    Ok(())
++}
++
++#[test]
++fn state_file_replacement_is_atomic_and_private() -> Result<()> {
++    let temp_dir = TempDir::new()?;
++    let path = temp_dir.path().join("state.json");
++    fs::write(&path, "old state")?;
++    let state = sample_state();
++
++    write_state_atomically(&path, &state)?;
++
++    let stored: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
++    assert_eq!(stored, serde_json::to_value(&state)?);
++    assert_eq!(fs::metadata(&path)?.permissions().mode() & 0o777, 0o600);
++    assert_eq!(fs::read_dir(temp_dir.path())?.count(), 1);
++    Ok(())
++}
++
++#[test]
++fn stale_socket_owned_by_current_user_is_removed() -> Result<()> {
++    let temp_dir = TempDir::new()?;
++    let path = temp_dir.path().join("stale.sock");
++    let socket = StdUnixDatagram::bind(&path)?;
++    drop(socket);
++
++    prepare_socket_path(&path)?;
++
++    assert!(!path.exists());
++    Ok(())
++}
++
++#[test]
++fn regular_file_at_socket_path_is_not_removed() -> Result<()> {
++    let temp_dir = TempDir::new()?;
++    let path = temp_dir.path().join("not-a-socket");
++    fs::write(&path, "keep me")?;
++
++    assert!(prepare_socket_path(&path).is_err());
++    assert_eq!(fs::read_to_string(path)?, "keep me");
++    Ok(())
++}
++
++fn delta(pid: u32, session_id: &str, stream_id: &str, estimated_tokens: u64) -> DeltaMessage {
++    DeltaMessage {
++        _pid: pid,
++        session_id: session_id.to_string(),
++        stream_id: stream_id.to_string(),
++        estimated_tokens,
++    }
++}
++
++fn sample_state() -> StateFile {
++    StateFile {
++        version: 1,
++        metric: METRIC_NAME,
++        estimated: true,
++        tokens_per_second: 8.4,
++        raw_tokens_per_second: 9.1,
++        active_sessions: 2,
++        active_streams: 3,
++        tool_active_streams: 1,
++        window_ms: 2000,
++        updated_at_unix_ms: 1234,
++    }
++}
+diff --git a/codex-rs/token-rate-daemon/src/main.rs b/codex-rs/token-rate-daemon/src/main.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..f11bab86d3929c9ce069cec1bfff0c22614849a2
+--- /dev/null
++++ b/codex-rs/token-rate-daemon/src/main.rs
+@@ -0,0 +1,19 @@
++#[cfg(unix)]
++mod aggregation;
++
++#[cfg(unix)]
++mod daemon;
++
++#[cfg(unix)]
++use clap::Parser;
++
++#[cfg(unix)]
++#[tokio::main]
++async fn main() -> anyhow::Result<()> {
++    daemon::run(daemon::Args::parse()).await
++}
++
++#[cfg(not(unix))]
++fn main() -> anyhow::Result<()> {
++    anyhow::bail!("codex-token-rate-daemon is only supported on Unix platforms")
++}
+diff --git a/codex-rs/token-rate-daemon/tests/global_rate.rs b/codex-rs/token-rate-daemon/tests/global_rate.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..0d8dd44c8626dc02d2d9ed0d41295f4efd58e668
+--- /dev/null
++++ b/codex-rs/token-rate-daemon/tests/global_rate.rs
+@@ -0,0 +1,241 @@
++#![cfg(unix)]
++
++use std::fs;
++use std::io;
++use std::os::unix::fs::PermissionsExt;
++use std::os::unix::net::UnixDatagram;
++use std::process::Child;
++use std::process::Command;
++use std::process::Stdio;
++use std::thread;
++use std::time::Duration;
++use std::time::Instant;
++
++use anyhow::Result;
++use anyhow::anyhow;
++use pretty_assertions::assert_eq;
++use serde::Deserialize;
++use serde_json::json;
++use tempfile::TempDir;
++
++#[derive(Debug, Deserialize)]
++struct StateFile {
++    tokens_per_second: f64,
++    raw_tokens_per_second: f64,
++    active_sessions: usize,
++    active_streams: usize,
++    tool_active_streams: usize,
++}
++
++struct ChildGuard {
++    child: Child,
++    finished: bool,
++}
++
++impl ChildGuard {
++    fn new(child: Child) -> Self {
++        Self {
++            child,
++            finished: false,
++        }
++    }
++
++    fn terminate(&mut self) -> Result<()> {
++        // SAFETY: kill is called with the child PID and a standard signal number.
++        if unsafe { libc::kill(self.child.id() as i32, libc::SIGTERM) } != 0 {
++            return Err(io::Error::last_os_error().into());
++        }
++        let deadline = Instant::now() + Duration::from_secs(3);
++        loop {
++            if let Some(status) = self.child.try_wait()? {
++                self.finished = true;
++                if !status.success() {
++                    return Err(anyhow!("daemon exited with {status}"));
++                }
++                return Ok(());
++            }
++            if Instant::now() >= deadline {
++                return Err(anyhow!("daemon did not exit after SIGTERM"));
++            }
++            thread::sleep(Duration::from_millis(20));
++        }
++    }
++}
++
++impl Drop for ChildGuard {
++    fn drop(&mut self) {
++        if !self.finished {
++            let _ = self.child.kill();
++            let _ = self.child.wait();
++        }
++    }
++}
++
++#[test]
++fn daemon_aggregates_processes_and_returns_to_zero() -> Result<()> {
++    let temp_dir = TempDir::new()?;
++    let socket_path = temp_dir.path().join("rate.sock");
++    let state_path = temp_dir.path().join("rate.json");
++    let child = Command::new(codex_utils_cargo_bin::cargo_bin("codex-token-rate-daemon")?)
++        .args([
++            "--socket",
++            &socket_path.to_string_lossy(),
++            "--state-file",
++            &state_path.to_string_lossy(),
++            "--window-ms",
++            "300",
++            "--refresh-ms",
++            "50",
++        ])
++        .stdout(Stdio::null())
++        .stderr(Stdio::null())
++        .spawn()?;
++    let mut child = ChildGuard::new(child);
++    wait_for_path(&socket_path, Duration::from_secs(3))?;
++    assert_eq!(
++        fs::metadata(&socket_path)?.permissions().mode() & 0o777,
++        0o600
++    );
++
++    let sender = UnixDatagram::unbound()?;
++    send_delta(
++        &sender,
++        &socket_path,
++        /*pid*/ 101,
++        "session-a",
++        "101-1",
++        /*estimated_tokens*/ 3,
++    )?;
++    send_delta(
++        &sender,
++        &socket_path,
++        /*pid*/ 202,
++        "session-b",
++        "202-1",
++        /*estimated_tokens*/ 5,
++    )?;
++
++    let largest_individual_rate = 5.0 / 0.3;
++    let active = wait_for_state(&state_path, Duration::from_secs(3), |state| {
++        state.active_sessions == 2
++            && state.active_streams == 2
++            && state.tokens_per_second > largest_individual_rate
++    })?;
++    assert!(active.raw_tokens_per_second > largest_individual_rate);
++
++    send_response_completed(&sender, &socket_path, "session-a", "101-1")?;
++    thread::sleep(Duration::from_millis(350));
++    let held = wait_for_state(&state_path, Duration::from_secs(3), |state| {
++        state.tool_active_streams == 1
++            && state.active_sessions == 1
++            && state.active_streams == 1
++            && state.raw_tokens_per_second == 10.0
++            && state.tokens_per_second == 10.0
++    })?;
++    assert_eq!(held.tool_active_streams, 1);
++
++    send_tool_execution_completed(&sender, &socket_path, "session-a", "101-1")?;
++
++    let idle = wait_for_state(&state_path, Duration::from_secs(3), |state| {
++        state.raw_tokens_per_second == 0.0 && state.tokens_per_second == 0.0
++    })?;
++    assert_eq!(idle.active_sessions, 0);
++    assert_eq!(idle.active_streams, 0);
++
++    child.terminate()?;
++    assert!(!socket_path.exists());
++    Ok(())
++}
++
++fn send_response_completed(
++    sender: &UnixDatagram,
++    socket_path: &std::path::Path,
++    session_id: &str,
++    stream_id: &str,
++) -> Result<()> {
++    let payload = serde_json::to_vec(&json!({
++        "v": 1,
++        "event": "response_completed",
++        "pid": 101,
++        "session_id": session_id,
++        "stream_id": stream_id,
++        "next_phase": "tool_execution",
++    }))?;
++    sender.send_to(&payload, socket_path)?;
++    Ok(())
++}
++
++fn send_tool_execution_completed(
++    sender: &UnixDatagram,
++    socket_path: &std::path::Path,
++    session_id: &str,
++    stream_id: &str,
++) -> Result<()> {
++    let payload = serde_json::to_vec(&json!({
++        "v": 1,
++        "event": "tool_execution_completed",
++        "pid": 101,
++        "session_id": session_id,
++        "stream_id": stream_id,
++    }))?;
++    sender.send_to(&payload, socket_path)?;
++    Ok(())
++}
++
++fn send_delta(
++    sender: &UnixDatagram,
++    socket_path: &std::path::Path,
++    pid: u32,
++    session_id: &str,
++    stream_id: &str,
++    estimated_tokens: u64,
++) -> Result<()> {
++    let payload = serde_json::to_vec(&json!({
++        "v": 1,
++        "event": "delta",
++        "ts_unix_ms": 1,
++        "pid": pid,
++        "session_id": session_id,
++        "turn_id": "turn",
++        "stream_id": stream_id,
++        "model": "test-model",
++        "kind": "visible_output",
++        "estimated_tokens": estimated_tokens,
++        "utf8_bytes": estimated_tokens * 4,
++    }))?;
++    sender.send_to(&payload, socket_path)?;
++    Ok(())
++}
++
++fn wait_for_path(path: &std::path::Path, timeout: Duration) -> Result<()> {
++    let deadline = Instant::now() + timeout;
++    while Instant::now() < deadline {
++        if path.exists() {
++            return Ok(());
++        }
++        thread::sleep(Duration::from_millis(20));
++    }
++    Err(anyhow!("timed out waiting for {}", path.display()))
++}
++
++fn wait_for_state(
++    path: &std::path::Path,
++    timeout: Duration,
++    predicate: impl Fn(&StateFile) -> bool,
++) -> Result<StateFile> {
++    let deadline = Instant::now() + timeout;
++    while Instant::now() < deadline {
++        match fs::read(path) {
++            Ok(bytes) => {
++                let state: StateFile = serde_json::from_slice(&bytes)?;
++                if predicate(&state) {
++                    return Ok(state);
++                }
++            }
++            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
++            Err(err) => return Err(err.into()),
++        }
++        thread::sleep(Duration::from_millis(20));
++    }
++    Err(anyhow!("timed out waiting for state in {}", path.display()))
++}
+diff --git a/scripts/install-patched-codex.sh b/scripts/install-patched-codex.sh
+new file mode 100755
+index 0000000000000000000000000000000000000000..fba15936df5ed14fa5aea506ab6bc240958d4fa0
+--- /dev/null
++++ b/scripts/install-patched-codex.sh
+@@ -0,0 +1,41 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
++TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/codex-rs/target}"
++INSTALL_DIR="${CODEX_PATCH_INSTALL_DIR:-$HOME/.local/bin}"
++
++if [[ "$TARGET_DIR" != /* ]]; then
++  TARGET_DIR="$REPO_ROOT/codex-rs/$TARGET_DIR"
++fi
++
++CODEX_BINARY="$TARGET_DIR/release/codex"
++DAEMON_BINARY="$TARGET_DIR/release/codex-token-rate-daemon"
++
++for binary in "$CODEX_BINARY" "$DAEMON_BINARY"; do
++  if [[ ! -f "$binary" ]]; then
++    printf 'Missing release build: %s\n' "$binary" >&2
++    printf 'Run the two cargo build --release commands first.\n' >&2
++    exit 1
++  fi
++done
++
++install -d "$INSTALL_DIR"
++install -m 755 "$CODEX_BINARY" "$INSTALL_DIR/codex-patched"
++install -m 755 "$DAEMON_BINARY" "$INSTALL_DIR/codex-token-rate-daemon"
++
++CODEX_VERSION="$("$INSTALL_DIR/codex-patched" --version)"
++DAEMON_VERSION="$("$INSTALL_DIR/codex-token-rate-daemon" --version)"
++TEMP_DIR="${TMPDIR:-/tmp}"
++SOCKET_PATH="${TEMP_DIR%/}/codex-token-rate.sock"
++STATE_FILE="${TEMP_DIR%/}/codex-token-rate.json"
++
++printf 'Installed %s\n' "$CODEX_VERSION"
++printf 'Installed %s\n\n' "$DAEMON_VERSION"
++printf 'Start the daemon:\n'
++printf '  %q --socket %q --state-file %q --stdout\n' \
++  "$INSTALL_DIR/codex-token-rate-daemon" "$SOCKET_PATH" "$STATE_FILE"
++printf '\nStart patched Codex in another terminal:\n'
++printf '  export CODEX_TOKEN_RATE_SOCKET=%q\n' "$SOCKET_PATH"
++printf '  %q\n' "$INSTALL_DIR/codex-patched"
+
+base-commit: 8c68d4c87dc54d38861f5114e920c3de2efa5876
+-- 
+2.55.0
+

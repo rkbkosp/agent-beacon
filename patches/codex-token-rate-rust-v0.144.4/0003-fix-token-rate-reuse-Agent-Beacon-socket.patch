@@ -1,0 +1,90 @@
+From 18043f078a417ef3bacc12c016d8c7950f436668 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E2=80=9Crkbkosp=E2=80=9D?= <whitemousehuang@gmail.com>
+Date: Thu, 16 Jul 2026 12:38:13 +0800
+Subject: [PATCH 3/3] fix(token-rate): reuse Agent Beacon socket
+
+- inherit the launchd socket when the configured path is absent or stale
+- avoid starting a duplicate standalone daemon during patched installs
+---
+ codex-rs/token-rate-daemon/README.md | 13 +++++++++++++
+ scripts/codex-patched-wrapper.sh     |  8 ++++++++
+ scripts/install-patched-codex.sh     | 25 +++++++++++++++++++------
+ 3 files changed, 40 insertions(+), 6 deletions(-)
+
+diff --git a/codex-rs/token-rate-daemon/README.md b/codex-rs/token-rate-daemon/README.md
+index d615274830b9acb1f277e7ac535d5e7f04ba4e42..6000f04dbbead55baed38bc5ce5a1d39bf6367bd 100644
+--- a/codex-rs/token-rate-daemon/README.md
++++ b/codex-rs/token-rate-daemon/README.md
+@@ -43,6 +43,19 @@ export CODEX_TOKEN_RATE_SOCKET="${TMPDIR:-/tmp}/codex-token-rate.sock"
+ ~/.local/bin/codex-patched
+ ```
+ 
++When Agent Beacon owns the companion daemon, do not start this standalone daemon. Use the socket
++published by its LaunchAgent instead so Codex and the bridge share one aggregate:
++
++```bash
++unset CODEX_TOKEN_RATE_SOCKET
++export CODEX_TOKEN_RATE_SOCKET="$(launchctl getenv CODEX_TOKEN_RATE_SOCKET)"
++~/.local/bin/codex-patched
++```
++
++Restart already-running patched Codex processes after changing the socket; process environments
++cannot be updated retroactively. On macOS, the installed `codex-patched` launcher automatically
++uses the published LaunchAgent socket when the variable is unset or still names a removed socket.
++
+ The state file contains the already-aggregated global rate:
+ 
+ ```bash
+diff --git a/scripts/codex-patched-wrapper.sh b/scripts/codex-patched-wrapper.sh
+index b819272e1ed0f45a18bc5b3b359f965593096a9c..0b62267fce2d6978a793c4c3cb7199b69eb5c1a6 100755
+--- a/scripts/codex-patched-wrapper.sh
++++ b/scripts/codex-patched-wrapper.sh
+@@ -3,4 +3,12 @@ set -euo pipefail
+ 
+ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ 
++if [[ "$(uname -s)" == "Darwin" ]]; then
++  launchd_socket="$(/bin/launchctl getenv CODEX_TOKEN_RATE_SOCKET 2>/dev/null || true)"
++  if [[ -n "$launchd_socket" ]] && [[ -S "$launchd_socket" ]] &&
++    { [[ -z "${CODEX_TOKEN_RATE_SOCKET:-}" ]] || [[ ! -S "$CODEX_TOKEN_RATE_SOCKET" ]]; }; then
++    export CODEX_TOKEN_RATE_SOCKET="$launchd_socket"
++  fi
++fi
++
+ exec "$SCRIPT_DIR/.codex-patched/codex" "$@"
+diff --git a/scripts/install-patched-codex.sh b/scripts/install-patched-codex.sh
+index 70f5717dff6365fca1954c8bd7dd8ca4705e6563..6cb18dc8e4ff1994b67a820bb40f160ef0503c0b 100755
+--- a/scripts/install-patched-codex.sh
++++ b/scripts/install-patched-codex.sh
+@@ -41,9 +41,22 @@ STATE_FILE="${TEMP_DIR%/}/codex-token-rate.json"
+ 
+ printf 'Installed %s\n' "$CODEX_VERSION"
+ printf 'Installed %s\n\n' "$DAEMON_VERSION"
+-printf 'Start the daemon:\n'
+-printf '  %q --socket %q --state-file %q --stdout\n' \
+-  "$INSTALL_DIR/codex-token-rate-daemon" "$SOCKET_PATH" "$STATE_FILE"
+-printf '\nStart patched Codex in another terminal:\n'
+-printf '  export CODEX_TOKEN_RATE_SOCKET=%q\n' "$SOCKET_PATH"
+-printf '  %q\n' "$INSTALL_DIR/codex-patched"
++
++launchd_socket=""
++if [[ "$(uname -s)" == "Darwin" ]]; then
++  launchd_socket="$(/bin/launchctl getenv CODEX_TOKEN_RATE_SOCKET 2>/dev/null || true)"
++fi
++
++if [[ -n "$launchd_socket" ]]; then
++  printf 'Agent Beacon token-rate daemon detected at %q.\n' "$launchd_socket"
++  printf 'Start patched Codex with its shared socket:\n'
++  printf '  unset CODEX_TOKEN_RATE_SOCKET\n'
++  printf '  %q\n' "$INSTALL_DIR/codex-patched"
++else
++  printf 'Start the standalone daemon:\n'
++  printf '  %q --socket %q --state-file %q --stdout\n' \
++    "$INSTALL_DIR/codex-token-rate-daemon" "$SOCKET_PATH" "$STATE_FILE"
++  printf '\nStart patched Codex in another terminal:\n'
++  printf '  export CODEX_TOKEN_RATE_SOCKET=%q\n' "$SOCKET_PATH"
++  printf '  %q\n' "$INSTALL_DIR/codex-patched"
++fi
+-- 
+2.55.0
+

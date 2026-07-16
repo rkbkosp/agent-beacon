@@ -1,0 +1,73 @@
+From a985fa641d2323b0773ec41f697689ed3feb4211 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E2=80=9Crkbkosp=E2=80=9D?= <whitemousehuang@gmail.com>
+Date: Thu, 16 Jul 2026 10:36:47 +0800
+Subject: [PATCH 2/3] fix(token-rate): preserve Codex identity for Herdr
+
+---
+ codex-rs/token-rate-daemon/README.md |  5 +++++
+ scripts/codex-patched-wrapper.sh     |  6 ++++++
+ scripts/install-patched-codex.sh     | 12 ++++++++++--
+ 3 files changed, 21 insertions(+), 2 deletions(-)
+ create mode 100755 scripts/codex-patched-wrapper.sh
+
+diff --git a/codex-rs/token-rate-daemon/README.md b/codex-rs/token-rate-daemon/README.md
+index a2153d4d5553ab860d853eef7e14aaff2ba72e7a..d615274830b9acb1f277e7ac535d5e7f04ba4e42 100644
+--- a/codex-rs/token-rate-daemon/README.md
++++ b/codex-rs/token-rate-daemon/README.md
+@@ -19,6 +19,11 @@ cd ..
+ scripts/install-patched-codex.sh
+ ```
+ 
++The installer keeps any existing `codex` command untouched. It installs the patched payload as
++`~/.local/bin/.codex-patched/codex` and exposes `~/.local/bin/codex-patched` as a launcher. The
++payload basename remains `codex` so Herdr can recognize the foreground process while callers keep
++using the distinct `codex-patched` command.
++
+ Start the daemon:
+ 
+ ```bash
+diff --git a/scripts/codex-patched-wrapper.sh b/scripts/codex-patched-wrapper.sh
+new file mode 100755
+index 0000000000000000000000000000000000000000..b819272e1ed0f45a18bc5b3b359f965593096a9c
+--- /dev/null
++++ b/scripts/codex-patched-wrapper.sh
+@@ -0,0 +1,6 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++
++exec "$SCRIPT_DIR/.codex-patched/codex" "$@"
+diff --git a/scripts/install-patched-codex.sh b/scripts/install-patched-codex.sh
+index fba15936df5ed14fa5aea506ab6bc240958d4fa0..70f5717dff6365fca1954c8bd7dd8ca4705e6563 100755
+--- a/scripts/install-patched-codex.sh
++++ b/scripts/install-patched-codex.sh
+@@ -12,6 +12,8 @@ fi
+ 
+ CODEX_BINARY="$TARGET_DIR/release/codex"
+ DAEMON_BINARY="$TARGET_DIR/release/codex-token-rate-daemon"
++CODEX_LAUNCHER="$SCRIPT_DIR/codex-patched-wrapper.sh"
++CODEX_PAYLOAD_DIR="$INSTALL_DIR/.codex-patched"
+ 
+ for binary in "$CODEX_BINARY" "$DAEMON_BINARY"; do
+   if [[ ! -f "$binary" ]]; then
+@@ -21,8 +23,14 @@ for binary in "$CODEX_BINARY" "$DAEMON_BINARY"; do
+   fi
+ done
+ 
+-install -d "$INSTALL_DIR"
+-install -m 755 "$CODEX_BINARY" "$INSTALL_DIR/codex-patched"
++if [[ ! -f "$CODEX_LAUNCHER" ]]; then
++  printf 'Missing launcher: %s\n' "$CODEX_LAUNCHER" >&2
++  exit 1
++fi
++
++install -d "$INSTALL_DIR" "$CODEX_PAYLOAD_DIR"
++install -m 755 "$CODEX_BINARY" "$CODEX_PAYLOAD_DIR/codex"
++install -m 755 "$CODEX_LAUNCHER" "$INSTALL_DIR/codex-patched"
+ install -m 755 "$DAEMON_BINARY" "$INSTALL_DIR/codex-token-rate-daemon"
+ 
+ CODEX_VERSION="$("$INSTALL_DIR/codex-patched" --version)"
+-- 
+2.55.0
+
