@@ -206,7 +206,8 @@ weather-lunch-umbrella    weather-leave-umbrella  weather-stale
 bridge-offline
 ```
 
-BOOT：短按下一页，双击重播最近未过期通知，长按 2 秒进入或退出诊断页。诊断页
+BOOT：短按下一页，双击重播最近未过期通知；连按三下会立即固定显示 Token 速度
+面板并暂停轮播，再短按一次从该页恢复轮播。长按 2 秒进入或退出诊断页，诊断页
 会按 1 秒刷新 SoC 芯片温度和双核综合 CPU 占用率。长按 5 秒的配网手势已识别，
 SoftAP 配网页属于正式 MVP 后续工作。
 

@@ -101,6 +101,9 @@ bool beacon_ui_state_set_codex_active(beacon_ui_state_t *state, bool active)
     }
 
     state->codex_active = active;
+    if (state->carousel_paused) {
+        return false;
+    }
     if (active) {
         if (state->mode == BEACON_UI_NOTIFICATION) {
             state->saved_page = BEACON_PAGE_CODEX;
@@ -156,6 +159,10 @@ bool beacon_ui_state_tick(beacon_ui_state_t *state, uint32_t elapsed_ms)
         }
     }
 
+    if (state->carousel_paused) {
+        return changed;
+    }
+
     while (elapsed_ms >= state->carousel_remaining_ms) {
         elapsed_ms -= state->carousel_remaining_ms;
         state->page = next_page(state->page, state->codex_active);
@@ -168,11 +175,28 @@ bool beacon_ui_state_tick(beacon_ui_state_t *state, uint32_t elapsed_ms)
 
 void beacon_ui_state_next_page(beacon_ui_state_t *state)
 {
-    if (state == NULL || state->mode != BEACON_UI_CAROUSEL) {
+    if (state == NULL || state->mode != BEACON_UI_CAROUSEL || state->carousel_paused) {
         return;
     }
     state->page = next_page(state->page, state->codex_active);
     state->carousel_remaining_ms = beacon_ui_page_interval_ms(state->page);
+}
+
+void beacon_ui_state_pin_token_rate(beacon_ui_state_t *state)
+{
+    if (state == NULL || state->mode != BEACON_UI_CAROUSEL) {
+        return;
+    }
+    state->page = BEACON_PAGE_CODEX;
+    state->carousel_remaining_ms = beacon_ui_page_interval_ms(BEACON_PAGE_CODEX);
+    state->carousel_paused = true;
+}
+
+void beacon_ui_state_resume_carousel(beacon_ui_state_t *state)
+{
+    if (state != NULL && state->mode == BEACON_UI_CAROUSEL) {
+        state->carousel_paused = false;
+    }
 }
 
 void beacon_ui_state_show_notification(beacon_ui_state_t *state, beacon_theme_t theme,

@@ -167,6 +167,50 @@ static void test_codex_deactivation_removes_dashboard(void)
     assert(state.page == BEACON_PAGE_AGENTS);
 }
 
+static void test_token_rate_pin_stops_and_resumes_carousel(void)
+{
+    beacon_ui_state_t state;
+    beacon_ui_state_init(&state);
+
+    beacon_ui_state_pin_token_rate(&state);
+    assert(state.mode == BEACON_UI_CAROUSEL);
+    assert(state.carousel_paused);
+    assert(state.page == BEACON_PAGE_CODEX);
+    assert(state.carousel_remaining_ms == 15000);
+
+    assert(!beacon_ui_state_tick(&state, 60000));
+    assert(state.page == BEACON_PAGE_CODEX);
+    assert(state.carousel_remaining_ms == 15000);
+    beacon_ui_state_next_page(&state);
+    assert(state.page == BEACON_PAGE_CODEX);
+
+    assert(!beacon_ui_state_set_codex_active(&state, true));
+    assert(!beacon_ui_state_set_codex_active(&state, false));
+    assert(state.page == BEACON_PAGE_CODEX);
+
+    beacon_ui_state_resume_carousel(&state);
+    assert(!state.carousel_paused);
+    assert(!beacon_ui_state_tick(&state, 14999));
+    assert(state.page == BEACON_PAGE_CODEX);
+    assert(beacon_ui_state_tick(&state, 1));
+    assert(state.page == BEACON_PAGE_AGENTS);
+    assert(state.carousel_remaining_ms == 6000);
+}
+
+static void test_notification_restores_pinned_token_rate_page(void)
+{
+    beacon_ui_state_t state;
+    beacon_ui_state_init(&state);
+    beacon_ui_state_pin_token_rate(&state);
+    beacon_ui_state_show_notification(&state, BEACON_THEME_BLUE, 1000);
+
+    assert(beacon_ui_state_tick(&state, 1000));
+    assert(state.mode == BEACON_UI_CAROUSEL);
+    assert(state.carousel_paused);
+    assert(state.page == BEACON_PAGE_CODEX);
+    assert(state.carousel_remaining_ms == 15000);
+}
+
 static void test_notification_restores_interrupted_page(void)
 {
     beacon_ui_state_t state;
@@ -251,6 +295,8 @@ int main(void)
     test_carousel_and_manual_navigation();
     test_codex_activation_jumps_for_fifteen_seconds();
     test_codex_deactivation_removes_dashboard();
+    test_token_rate_pin_stops_and_resumes_carousel();
+    test_notification_restores_pinned_token_rate_page();
     test_notification_restores_interrupted_page();
     test_activation_waits_for_notification_overlay();
     test_elapsed_time_carries_across_boundaries();

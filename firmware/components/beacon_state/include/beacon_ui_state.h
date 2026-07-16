@@ -32,6 +32,7 @@ typedef struct {
     beacon_page_t saved_page;
     beacon_theme_t theme;
     bool codex_active;
+    bool carousel_paused;
     uint32_t carousel_remaining_ms;
     uint32_t saved_carousel_remaining_ms;
     uint32_t notification_remaining_ms;
@@ -50,6 +51,8 @@ void beacon_ui_state_init(beacon_ui_state_t *state);
 bool beacon_ui_state_set_codex_active(beacon_ui_state_t *state, bool active);
 bool beacon_ui_state_tick(beacon_ui_state_t *state, uint32_t elapsed_ms);
 void beacon_ui_state_next_page(beacon_ui_state_t *state);
+void beacon_ui_state_pin_token_rate(beacon_ui_state_t *state);
+void beacon_ui_state_resume_carousel(beacon_ui_state_t *state);
 void beacon_ui_state_show_notification(beacon_ui_state_t *state, beacon_theme_t theme,
                                        uint32_t display_ms);
 void beacon_ui_state_enter_diagnostics(beacon_ui_state_t *state);

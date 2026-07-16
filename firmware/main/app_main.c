@@ -240,7 +240,11 @@ void app_main(void)
         const beacon_button_event_t button_event =
             beacon_button_update(&boot_button, board_boot_button_pressed(), elapsed_ms);
         if (button_event == BEACON_BUTTON_SHORT_PRESS && ui_state.mode == BEACON_UI_CAROUSEL) {
-            beacon_ui_state_next_page(&ui_state);
+            if (ui_state.carousel_paused) {
+                beacon_ui_state_resume_carousel(&ui_state);
+            } else {
+                beacon_ui_state_next_page(&ui_state);
+            }
             beacon_ui_show_page(ui_state.page);
         } else if (button_event == BEACON_BUTTON_DOUBLE_PRESS &&
                    ui_state.mode == BEACON_UI_CAROUSEL) {
@@ -250,6 +254,10 @@ void app_main(void)
                 send_transition_acks(&replay_transition);
                 present_current_notification(&notification_center, &ui_state);
             }
+        } else if (button_event == BEACON_BUTTON_TRIPLE_PRESS &&
+                   ui_state.mode == BEACON_UI_CAROUSEL) {
+            beacon_ui_state_pin_token_rate(&ui_state);
+            beacon_ui_show_page(ui_state.page);
         } else if (button_event == BEACON_BUTTON_LONG_2S) {
             if (ui_state.mode == BEACON_UI_DIAGNOSTICS) {
                 beacon_ui_state_exit_diagnostics(&ui_state);

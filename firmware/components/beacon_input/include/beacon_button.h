@@ -7,6 +7,7 @@ typedef enum {
     BEACON_BUTTON_NONE = 0,
     BEACON_BUTTON_SHORT_PRESS,
     BEACON_BUTTON_DOUBLE_PRESS,
+    BEACON_BUTTON_TRIPLE_PRESS,
     BEACON_BUTTON_LONG_2S,
     BEACON_BUTTON_LONG_5S,
 } beacon_button_event_t;
@@ -17,6 +18,7 @@ typedef struct {
     bool click_pending;
     bool long_2s_emitted;
     bool long_5s_emitted;
+    uint8_t click_count;
     uint32_t debounce_ms;
     uint32_t double_click_ms;
     uint32_t long_2s_ms;

@@ -17,7 +17,9 @@ Agents only when Codex was the current page. Diagnostics is a non-carousel
 surface and notifications are full-screen overlays, so either one defers the
 visible jump until that explicit surface exits. BOOT short press advances among
 the currently eligible pages and resets the destination interval; double press
-replays the latest unexpired notification; 2-second hold toggles diagnostics;
+replays the latest unexpired notification; triple press immediately pins the
+Codex Token-rate page and pauses the carousel; the next short press resumes the
+carousel from a full Codex interval. A 2-second hold toggles diagnostics and a
 5-second hold is reserved for provisioning. A notification saves both the page
 and remaining interval, which are restored after the notification queue drains.
 

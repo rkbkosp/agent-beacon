@@ -24,7 +24,7 @@ static void test_short_press_waits_for_double_click_window(void)
     assert(sample(&button, false, 1) == BEACON_BUTTON_SHORT_PRESS);
 }
 
-static void test_double_press_fires_without_short_press(void)
+static void test_double_press_waits_for_triple_click_window(void)
 {
     beacon_button_t button;
     beacon_button_init(&button, 30, 350, 2000, 5000);
@@ -33,8 +33,39 @@ static void test_double_press_fires_without_short_press(void)
     assert(sample(&button, true, 20) == BEACON_BUTTON_NONE);
     assert(sample(&button, true, 20) == BEACON_BUTTON_NONE);
     assert(sample(&button, false, 20) == BEACON_BUTTON_NONE);
-    assert(sample(&button, false, 20) == BEACON_BUTTON_DOUBLE_PRESS);
+    assert(sample(&button, false, 20) == BEACON_BUTTON_NONE);
+    assert(sample(&button, false, 349) == BEACON_BUTTON_NONE);
+    assert(sample(&button, false, 1) == BEACON_BUTTON_DOUBLE_PRESS);
+}
+
+static void test_triple_press_fires_on_third_release(void)
+{
+    beacon_button_t button;
+    beacon_button_init(&button, 30, 350, 2000, 5000);
+    press_and_release(&button);
+    assert(sample(&button, false, 100) == BEACON_BUTTON_NONE);
+    press_and_release(&button);
+    assert(sample(&button, false, 100) == BEACON_BUTTON_NONE);
+
+    assert(sample(&button, true, 20) == BEACON_BUTTON_NONE);
+    assert(sample(&button, true, 20) == BEACON_BUTTON_NONE);
+    assert(sample(&button, false, 20) == BEACON_BUTTON_NONE);
+    assert(sample(&button, false, 20) == BEACON_BUTTON_TRIPLE_PRESS);
     assert(sample(&button, false, 400) == BEACON_BUTTON_NONE);
+}
+
+static void test_next_press_at_window_edge_keeps_click_sequence(void)
+{
+    beacon_button_t button;
+    beacon_button_init(&button, 30, 350, 2000, 5000);
+    press_and_release(&button);
+    assert(sample(&button, false, 340) == BEACON_BUTTON_NONE);
+
+    assert(sample(&button, true, 20) == BEACON_BUTTON_NONE);
+    assert(sample(&button, true, 20) == BEACON_BUTTON_NONE);
+    assert(sample(&button, false, 20) == BEACON_BUTTON_NONE);
+    assert(sample(&button, false, 20) == BEACON_BUTTON_NONE);
+    assert(sample(&button, false, 350) == BEACON_BUTTON_DOUBLE_PRESS);
 }
 
 static void test_two_and_five_second_holds_fire_once(void)
@@ -65,7 +96,9 @@ static void test_bounce_does_not_create_event(void)
 int main(void)
 {
     test_short_press_waits_for_double_click_window();
-    test_double_press_fires_without_short_press();
+    test_double_press_waits_for_triple_click_window();
+    test_triple_press_fires_on_third_release();
+    test_next_press_at_window_edge_keeps_click_sequence();
     test_two_and_five_second_holds_fire_once();
     test_bounce_does_not_create_event();
     return 0;

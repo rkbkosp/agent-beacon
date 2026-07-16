@@ -47,15 +47,17 @@ beacon_button_event_t beacon_button_update(beacon_button_t *button, bool raw_pre
         }
 
         if (!button->long_2s_emitted && button->pressed_elapsed_ms > 0U) {
-            if (button->click_pending) {
-                button->click_pending = false;
-                button->click_elapsed_ms = 0;
-                return BEACON_BUTTON_DOUBLE_PRESS;
-            }
             button->click_pending = true;
             button->click_elapsed_ms = 0;
+            button->click_count++;
+            if (button->click_count >= 3U) {
+                button->click_pending = false;
+                button->click_count = 0;
+                return BEACON_BUTTON_TRIPLE_PRESS;
+            }
         } else {
             button->click_pending = false;
+            button->click_count = 0;
             button->click_elapsed_ms = 0;
         }
         return BEACON_BUTTON_NONE;
@@ -66,6 +68,8 @@ beacon_button_event_t beacon_button_update(beacon_button_t *button, bool raw_pre
         if (!button->long_2s_emitted && button->pressed_elapsed_ms >= button->long_2s_ms) {
             button->long_2s_emitted = true;
             button->click_pending = false;
+            button->click_count = 0;
+            button->click_elapsed_ms = 0;
             return BEACON_BUTTON_LONG_2S;
         }
         if (!button->long_5s_emitted && button->pressed_elapsed_ms >= button->long_5s_ms) {
@@ -75,12 +79,16 @@ beacon_button_event_t beacon_button_update(beacon_button_t *button, bool raw_pre
         return BEACON_BUTTON_NONE;
     }
 
-    if (button->click_pending) {
+    if (button->click_pending && !raw_pressed) {
         button->click_elapsed_ms = add_saturated(button->click_elapsed_ms, elapsed_ms);
         if (button->click_elapsed_ms >= button->double_click_ms) {
+            const beacon_button_event_t event = button->click_count == 2U
+                                                    ? BEACON_BUTTON_DOUBLE_PRESS
+                                                    : BEACON_BUTTON_SHORT_PRESS;
             button->click_pending = false;
+            button->click_count = 0;
             button->click_elapsed_ms = 0;
-            return BEACON_BUTTON_SHORT_PRESS;
+            return event;
         }
     }
     return BEACON_BUTTON_NONE;
