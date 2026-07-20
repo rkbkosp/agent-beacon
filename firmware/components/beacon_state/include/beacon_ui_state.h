@@ -39,10 +39,6 @@ typedef struct {
 } beacon_ui_state_t;
 
 uint32_t beacon_ui_page_interval_ms(beacon_page_t page);
-bool beacon_ui_connection_snapshot_ready(bool was_ready, bool transport_connected,
-                                         bool snapshot_received);
-bool beacon_ui_connection_is_online(bool bridge_online, bool transport_connected,
-                                    bool snapshot_ready);
 bool beacon_ui_system_status_changed(const beacon_system_state_t *current,
                                      const beacon_system_state_t *incoming);
 bool beacon_ui_page_affected_by_domains(beacon_page_t page, uint8_t domains,

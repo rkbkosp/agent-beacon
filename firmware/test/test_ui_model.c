@@ -55,6 +55,50 @@ int main(void)
                       BEACON_TRANSPORT_NONE),
                   "○ 离线") == 0);
 
+    beacon_ui_connection_state_t connection_state = {0};
+    assert(!beacon_ui_connection_is_online(true, false,
+                                           connection_state.snapshot_ready));
+    assert(beacon_ui_connection_update(&connection_state, true,
+                                       BEACON_TRANSPORT_WIFI, false));
+    assert(!connection_state.snapshot_ready);
+    assert(!beacon_ui_connection_update(&connection_state, true,
+                                        BEACON_TRANSPORT_WIFI, true));
+    assert(connection_state.snapshot_ready);
+    assert(beacon_ui_connection_is_online(true, true,
+                                          connection_state.snapshot_ready));
+
+    // Regression: a snapshot may reach the UI queue before the main loop polls
+    // the new connection. Polling the same transport must preserve readiness.
+    beacon_ui_connection_state_t snapshot_first = {0};
+    assert(beacon_ui_connection_update(&snapshot_first, true,
+                                       BEACON_TRANSPORT_WIFI, true));
+    assert(snapshot_first.snapshot_ready);
+    assert(!beacon_ui_connection_update(&snapshot_first, true,
+                                        BEACON_TRANSPORT_WIFI, false));
+    assert(snapshot_first.snapshot_ready);
+
+    // A real transport switch still clears readiness until that session has a
+    // snapshot, regardless of which transport was previously ready.
+    assert(beacon_ui_connection_update(&snapshot_first, true,
+                                       BEACON_TRANSPORT_USB, false));
+    assert(!snapshot_first.snapshot_ready);
+    assert(!beacon_ui_connection_update(&snapshot_first, true,
+                                        BEACON_TRANSPORT_USB, true));
+    assert(snapshot_first.snapshot_ready);
+    assert(beacon_ui_connection_update(&snapshot_first, true,
+                                       BEACON_TRANSPORT_WIFI, true));
+    assert(snapshot_first.snapshot_ready);
+
+    assert(beacon_ui_connection_update(&snapshot_first, false,
+                                       BEACON_TRANSPORT_WIFI, true));
+    assert(!snapshot_first.transport_connected);
+    assert(snapshot_first.transport_kind == BEACON_TRANSPORT_NONE);
+    assert(!snapshot_first.snapshot_ready);
+    assert(!beacon_ui_connection_is_online(true, false,
+                                           snapshot_first.snapshot_ready));
+    assert(!beacon_ui_connection_is_online(false, true, true));
+    assert(!beacon_ui_connection_update(NULL, true, BEACON_TRANSPORT_WIFI, true));
+
     beacon_token_rate_state_t previous_rate = state->codex.token_rate;
     beacon_token_rate_state_t current_rate = previous_rate;
     current_rate.tokens_per_second = 0.0f;

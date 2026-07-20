@@ -17,18 +17,6 @@ uint32_t beacon_ui_page_interval_ms(beacon_page_t page)
     }
 }
 
-bool beacon_ui_connection_snapshot_ready(bool was_ready, bool transport_connected,
-                                         bool snapshot_received)
-{
-    return transport_connected && (was_ready || snapshot_received);
-}
-
-bool beacon_ui_connection_is_online(bool bridge_online, bool transport_connected,
-                                    bool snapshot_ready)
-{
-    return bridge_online && transport_connected && snapshot_ready;
-}
-
 bool beacon_ui_system_status_changed(const beacon_system_state_t *current,
                                      const beacon_system_state_t *incoming)
 {

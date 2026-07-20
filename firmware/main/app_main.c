@@ -8,6 +8,7 @@
 #include "beacon_protocol.h"
 #include "beacon_transport.h"
 #include "beacon_ui.h"
+#include "beacon_ui_model.h"
 #include "beacon_ui_state.h"
 #include "board_ws_147b.h"
 #include "esp_check.h"
@@ -34,9 +35,7 @@ static beacon_notification_transition_t expired_transition;
 static beacon_notification_transition_t replay_transition;
 static beacon_notification_transition_t completed_transition;
 static beacon_notification_transition_t offer_transition;
-static bool last_transport_connected;
-static beacon_transport_kind_t last_transport_kind = BEACON_TRANSPORT_NONE;
-static bool connection_snapshot_ready;
+static beacon_ui_connection_state_t connection_state;
 
 static int64_t wall_clock_ms(void)
 {
@@ -110,14 +109,11 @@ static void refresh_on_transport_change(const beacon_ui_state_t *ui_state)
 {
     const bool transport_connected = beacon_transport_is_connected();
     const beacon_transport_kind_t transport_kind = beacon_transport_active_kind();
-    if (transport_connected == last_transport_connected &&
-        transport_kind == last_transport_kind) {
+    if (!beacon_ui_connection_update(&connection_state, transport_connected,
+                                     transport_kind, false)) {
         return;
     }
-    last_transport_connected = transport_connected;
-    last_transport_kind = transport_kind;
-    connection_snapshot_ready = false;
-    beacon_ui_set_connection_snapshot_ready(connection_snapshot_ready);
+    beacon_ui_set_connection_snapshot_ready(connection_state.snapshot_ready);
     refresh_current_surface(ui_state);
     const char *transport_name = "disconnected";
     if (transport_kind == BEACON_TRANSPORT_USB) {
@@ -140,11 +136,12 @@ static void apply_protocol_state(const beacon_protocol_message_t *message,
     const bool page_changed =
         (message->state_domains & BEACON_STATE_DOMAIN_AGENTS) != 0U &&
         beacon_ui_state_set_codex_active(ui_state, app_state.agents.codex_active);
-    connection_snapshot_ready = beacon_ui_connection_snapshot_ready(
-        connection_snapshot_ready, beacon_transport_is_connected(),
+    (void)beacon_ui_connection_update(
+        &connection_state, beacon_transport_is_connected(),
+        beacon_transport_active_kind(),
         message->type == BEACON_PROTOCOL_MESSAGE_SNAPSHOT);
     beacon_ui_set_app_state(&app_state);
-    beacon_ui_set_connection_snapshot_ready(connection_snapshot_ready);
+    beacon_ui_set_connection_snapshot_ready(connection_state.snapshot_ready);
     if (page_changed) {
         beacon_ui_show_page(ui_state->page);
     } else if (ui_state->mode == BEACON_UI_DIAGNOSTICS) {

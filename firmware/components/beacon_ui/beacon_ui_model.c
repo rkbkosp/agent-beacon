@@ -45,6 +45,43 @@ const beacon_app_state_t *beacon_ui_default_app_state(void)
     return &state;
 }
 
+bool beacon_ui_connection_update(beacon_ui_connection_state_t *state,
+                                 bool transport_connected,
+                                 beacon_transport_kind_t transport_kind,
+                                 bool snapshot_received)
+{
+    if (state == NULL) {
+        return false;
+    }
+
+    const bool active_transport =
+        transport_connected && transport_kind != BEACON_TRANSPORT_NONE;
+    const beacon_transport_kind_t active_kind =
+        active_transport ? transport_kind : BEACON_TRANSPORT_NONE;
+    const bool transport_changed =
+        state->transport_connected != active_transport ||
+        state->transport_kind != active_kind;
+
+    if (transport_changed) {
+        state->transport_connected = active_transport;
+        state->transport_kind = active_kind;
+        state->snapshot_ready = false;
+    }
+    if (snapshot_received && active_transport) {
+        // A snapshot is itself proof of the current transport session. Recording
+        // the transport here makes readiness independent of whether the polling
+        // loop or the protocol queue observes a new connection first.
+        state->snapshot_ready = true;
+    }
+    return transport_changed;
+}
+
+bool beacon_ui_connection_is_online(bool bridge_online, bool transport_connected,
+                                    bool snapshot_ready)
+{
+    return bridge_online && transport_connected && snapshot_ready;
+}
+
 const char *beacon_ui_connection_status_label(bool bridge_online,
                                               bool transport_connected,
                                               bool snapshot_ready,

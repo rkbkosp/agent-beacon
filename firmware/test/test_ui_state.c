@@ -66,34 +66,6 @@ static void test_system_header_change_detection(void)
     assert(!beacon_ui_system_status_changed(&current, NULL));
 }
 
-static void test_online_status_requires_live_transport(void)
-{
-    bool snapshot_ready = false;
-
-    assert(!beacon_ui_connection_is_online(true, false, snapshot_ready));
-
-    snapshot_ready = beacon_ui_connection_snapshot_ready(snapshot_ready, true, false);
-    assert(!snapshot_ready);
-    assert(!beacon_ui_connection_is_online(true, true, snapshot_ready));
-
-    snapshot_ready = beacon_ui_connection_snapshot_ready(snapshot_ready, true, true);
-    assert(snapshot_ready);
-    assert(beacon_ui_connection_is_online(true, true, snapshot_ready));
-
-    snapshot_ready = beacon_ui_connection_snapshot_ready(snapshot_ready, false, false);
-    assert(!snapshot_ready);
-    assert(!beacon_ui_connection_is_online(true, false, snapshot_ready));
-
-    snapshot_ready = beacon_ui_connection_snapshot_ready(snapshot_ready, true, false);
-    assert(!snapshot_ready);
-    assert(!beacon_ui_connection_is_online(true, true, snapshot_ready));
-
-    snapshot_ready = beacon_ui_connection_snapshot_ready(snapshot_ready, true, true);
-    assert(snapshot_ready);
-    assert(beacon_ui_connection_is_online(true, true, snapshot_ready));
-    assert(!beacon_ui_connection_is_online(false, true, snapshot_ready));
-}
-
 static void test_carousel_and_manual_navigation(void)
 {
     beacon_ui_state_t state;
@@ -291,7 +263,6 @@ int main(void)
 {
     test_page_domain_visibility();
     test_system_header_change_detection();
-    test_online_status_requires_live_transport();
     test_carousel_and_manual_navigation();
     test_codex_activation_jumps_for_fifteen_seconds();
     test_codex_deactivation_removes_dashboard();
