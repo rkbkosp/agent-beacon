@@ -19,7 +19,11 @@ import (
 	"agent-beacon/internal/providers"
 )
 
-const maxHerdrLineBytes = 2 * 1024 * 1024
+const (
+	maxHerdrLineBytes   = 2 * 1024 * 1024
+	eventDebounce       = 100 * time.Millisecond
+	eventRefreshMaxWait = 500 * time.Millisecond
+)
 
 type Config struct {
 	SocketPath         string
@@ -98,6 +102,10 @@ type subscriptionResponse struct {
 	Error json.RawMessage `json:"error,omitempty"`
 }
 
+type eventEnvelope struct {
+	Event string `json:"event"`
+}
+
 func New(config Config) *Provider {
 	if config.ReconnectMax <= 0 {
 		config.ReconnectMax = 30 * time.Second
@@ -142,7 +150,7 @@ func (provider *Provider) Start(ctx context.Context, out chan<- providers.Update
 			return ctx.Err()
 		}
 
-		if err := provider.subscribeUntilResync(ctx, paneIDs); err != nil {
+		if err := provider.subscribeUntilResync(ctx, out, paneIDs); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -206,7 +214,9 @@ func (provider *Provider) fetchSnapshot(ctx context.Context) (protocol.AgentsSta
 	return state, paneIDs, nil
 }
 
-func (provider *Provider) subscribeUntilResync(ctx context.Context, paneIDs []string) error {
+func (provider *Provider) subscribeUntilResync(
+	ctx context.Context, out chan<- providers.Update, paneIDs []string,
+) error {
 	connection, err := provider.dial(ctx)
 	if err != nil {
 		return fmt.Errorf("connect Herdr event stream: %w", err)
@@ -251,16 +261,63 @@ func (provider *Provider) subscribeUntilResync(ctx context.Context, paneIDs []st
 		return fmt.Errorf("unexpected Herdr subscription response")
 	}
 
-	_ = connection.SetReadDeadline(time.Now().Add(provider.config.FullResyncInterval))
-	var event json.RawMessage
-	if err := decodeReaderLine(reader, &event); err != nil {
-		var netError net.Error
-		if errors.As(err, &netError) && netError.Timeout() {
+	_ = connection.SetDeadline(time.Time{})
+	fullResyncAt := time.Now().Add(provider.config.FullResyncInterval)
+	var eventPending bool
+	var quietUntil time.Time
+	var refreshBy time.Time
+
+	for {
+		deadline := fullResyncAt
+		if eventPending {
+			deadline = earlierTime(deadline, quietUntil)
+			deadline = earlierTime(deadline, refreshBy)
+		}
+		if err := connection.SetReadDeadline(deadline); err != nil {
+			return fmt.Errorf("set Herdr event stream deadline: %w", err)
+		}
+
+		var event eventEnvelope
+		err := decodeReaderLine(reader, &event)
+		now := time.Now()
+		refreshDue := !now.Before(fullResyncAt)
+		if err == nil {
+			if event.Event == "" {
+				return fmt.Errorf("unexpected Herdr event stream message")
+			}
+			if !eventPending {
+				eventPending = true
+				refreshBy = now.Add(eventRefreshMaxWait)
+			}
+			quietUntil = now.Add(eventDebounce)
+			refreshDue = refreshDue || !now.Before(refreshBy)
+		} else {
+			var netError net.Error
+			if !errors.As(err, &netError) || !netError.Timeout() {
+				return fmt.Errorf("read Herdr event stream: %w", err)
+			}
+			refreshDue = refreshDue || eventPending &&
+				(!now.Before(quietUntil) || !now.Before(refreshBy))
+		}
+		if !refreshDue {
+			continue
+		}
+
+		state, nextPaneIDs, err := provider.fetchSnapshot(ctx)
+		if err != nil {
+			return fmt.Errorf("refresh Herdr snapshot: %w", err)
+		}
+		provider.setHealth(true, fmt.Sprintf("connected to %s", provider.config.SocketPath))
+		if !provider.publishIfChanged(ctx, out, state) {
+			return ctx.Err()
+		}
+
+		eventPending = false
+		fullResyncAt = time.Now().Add(provider.config.FullResyncInterval)
+		if !reflect.DeepEqual(paneIDs, nextPaneIDs) {
 			return nil
 		}
-		return fmt.Errorf("read Herdr event stream: %w", err)
 	}
-	return nil
 }
 
 func (provider *Provider) dial(ctx context.Context) (net.Conn, error) {
@@ -510,6 +567,13 @@ func waitContext(ctx context.Context, duration time.Duration) bool {
 	case <-ctx.Done():
 		return false
 	}
+}
+
+func earlierTime(left, right time.Time) time.Time {
+	if right.Before(left) {
+		return right
+	}
+	return left
 }
 
 func firstNonEmpty(values ...string) string {

@@ -7,6 +7,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -183,52 +185,76 @@ func TestProviderSnapshotsSubscribesAndResyncsOnEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
-
-	requests := make(chan map[string]any, 8)
+	requests := make(chan map[string]any, 128)
+	serverCtx, stopServer := context.WithCancel(context.Background())
+	var handlers sync.WaitGroup
+	var snapshotCount atomic.Int32
+	var subscriptionCount atomic.Int32
 	serverDone := make(chan struct{})
 	go func() {
 		defer close(serverDone)
-		snapshotCount := 0
 		for {
 			connection, acceptErr := listener.Accept()
 			if acceptErr != nil {
 				return
 			}
-			var request map[string]any
-			decodeErr := json.NewDecoder(bufio.NewReader(connection)).Decode(&request)
-			if decodeErr != nil {
-				connection.Close()
-				continue
-			}
-			requests <- request
-			switch request["method"] {
-			case "session.snapshot":
-				status := "working"
-				if snapshotCount > 0 {
-					status = "blocked"
+			handlers.Add(1)
+			go func() {
+				defer handlers.Done()
+				defer connection.Close()
+				var request map[string]any
+				if err := json.NewDecoder(bufio.NewReader(connection)).Decode(&request); err != nil {
+					return
 				}
-				snapshotCount++
-				response := map[string]any{
-					"id": request["id"],
-					"result": map[string]any{"type": "session_snapshot", "snapshot": map[string]any{
-						"version": "0.7.3", "protocol": 16,
-						"workspaces": []any{map[string]any{"workspace_id": "w1", "label": "project", "tab_count": 1}},
-						"tabs":       []any{map[string]any{"tab_id": "w1:t1", "workspace_id": "w1", "label": "1"}},
-						"agents":     []any{map[string]any{"terminal_id": "term-1", "workspace_id": "w1", "tab_id": "w1:t1", "pane_id": "w1:p1", "agent": "codex", "agent_status": status, "focused": false, "revision": snapshotCount}},
-					}},
+				select {
+				case requests <- request:
+				default:
 				}
-				_ = json.NewEncoder(connection).Encode(response)
-				_ = connection.Close()
-			case "events.subscribe":
-				encoder := json.NewEncoder(connection)
-				_ = encoder.Encode(map[string]any{"id": request["id"], "result": map[string]any{"type": "subscription_started"}})
-				_ = encoder.Encode(map[string]any{"event": "pane.agent_status_changed", "data": map[string]any{"pane_id": "w1:p1", "agent_status": "blocked"}})
-				_ = connection.Close()
-			default:
-				_ = connection.Close()
-			}
+				switch request["method"] {
+				case "session.snapshot":
+					count := snapshotCount.Add(1)
+					status := "working"
+					if count > 1 {
+						status = "blocked"
+					}
+					response := map[string]any{
+						"id": request["id"],
+						"result": map[string]any{"type": "session_snapshot", "snapshot": map[string]any{
+							"version": "0.7.3", "protocol": 16,
+							"workspaces": []any{map[string]any{"workspace_id": "w1", "label": "project", "tab_count": 1}},
+							"tabs":       []any{map[string]any{"tab_id": "w1:t1", "workspace_id": "w1", "label": "1"}},
+							"agents":     []any{map[string]any{"terminal_id": "term-1", "workspace_id": "w1", "tab_id": "w1:t1", "pane_id": "w1:p1", "agent": "codex", "agent_status": status, "focused": false, "revision": count}},
+						}},
+					}
+					_ = json.NewEncoder(connection).Encode(response)
+				case "events.subscribe":
+					subscriptionCount.Add(1)
+					encoder := json.NewEncoder(connection)
+					if err := encoder.Encode(map[string]any{"id": request["id"], "result": map[string]any{"type": "subscription_started"}}); err != nil {
+						return
+					}
+					for index := 0; index < 120; index++ {
+						if err := encoder.Encode(map[string]any{"event": "pane.agent_status_changed", "data": map[string]any{
+							"pane_id": "w1:p1", "agent_status": "blocked",
+						}}); err != nil {
+							return
+						}
+						select {
+						case <-serverCtx.Done():
+							return
+						case <-time.After(5 * time.Millisecond):
+						}
+					}
+					<-serverCtx.Done()
+				}
+			}()
 		}
+	}()
+	defer func() {
+		stopServer()
+		_ = listener.Close()
+		<-serverDone
+		handlers.Wait()
 	}()
 
 	provider := New(Config{
@@ -247,6 +273,13 @@ func TestProviderSnapshotsSubscribesAndResyncsOnEvent(t *testing.T) {
 	second := receiveAgentsUpdate(t, updates)
 	if second.Items[0].Status != protocol.AgentBlocked {
 		t.Fatalf("second status = %q", second.Items[0].Status)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if got := subscriptionCount.Load(); got != 1 {
+		t.Fatalf("subscription count = %d, want 1 long-lived stream", got)
+	}
+	if got := snapshotCount.Load(); got > 3 {
+		t.Fatalf("snapshot count = %d, event burst was not coalesced", got)
 	}
 
 	var subscription map[string]any
@@ -277,8 +310,6 @@ func TestProviderSnapshotsSubscribesAndResyncsOnEvent(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("provider did not stop after context cancellation")
 	}
-	_ = listener.Close()
-	<-serverDone
 }
 
 func receiveAgentsUpdate(t *testing.T, updates <-chan providers.Update) protocol.AgentsState {
