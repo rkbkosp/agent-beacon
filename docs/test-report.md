@@ -521,6 +521,36 @@ rebuilt image passed the factory-backup guard and esptool hash verification on
 accepted the full snapshot at revision 4, then patches through revision 6,
 without a panic or reset.
 
+## 2026-07-21 Conditional Token-Rate/Quota Carousel Slot
+
+The Codex carousel slot now preserves the original full quota panel whenever
+`agents.codex_active=false`. Activation substitutes the Token-rate dashboard
+for a full 15-second interval; deactivation restores the quota panel for a full
+8-second interval without interrupting Agents or Weather. The triple-press
+manual Token-rate pin remains available, and resuming while inactive returns to
+the quota panel.
+
+Automated coverage includes inactive automatic/manual navigation, activation
+and deactivation on the visible Codex slot, deactivation from Weather,
+notification deferral, diagnostics, and pinned-page resume behavior.
+
+```text
+make test                                             PASS
+UI state/model targeted tests                        PASS
+ESP-IDF v5.5.4 build                                 PASS
+agent_beacon.bin                                      0x4ae800 bytes
+application partition free                           41%
+```
+
+The image passed the 16 MB factory-backup guard and esptool write verification
+on `/dev/cu.usbmodem21201`. The board booted the `ae83b01-dirty` image built on
+2026-07-21, initialized its 8 MB PSRAM, and rejoined the production Bridge over
+USB. Four checks across 15 seconds kept the device `ready=true`; the live
+revision 5 snapshot was fresh with `agents.codex_active=true`, exercising the
+Token-rate branch. The inactive quota branch remained covered by the host state
+tests because other real Codex sessions were still working during the device
+run.
+
 ## 2026-07-16 Type-C USB Primary Transport
 
 The ESP32-S3 USB-Serial/JTAG CDC now carries framed protocol v2 traffic as the

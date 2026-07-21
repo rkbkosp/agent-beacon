@@ -2,9 +2,9 @@
 
 Agent Beacon 将 Waveshare ESP32-S3-LCD-1.47B 用作本地桌面状态终端。当前第一轮
 实现 Codex 全局实时 Token 速度与两个 Home 的一周额度、Herdr Agent 状态、
-午饭/下班天气；状态变化通过蓝、黄、红、绿全屏通知展示。Agents 与天气页始终
-轮播；只有 Herdr 存在 `working` 的 Codex session 时，速度仪表盘才会立即出现并
-以 15 秒时长加入轮播。
+午饭/下班天气；状态变化通过蓝、黄、红、绿全屏通知展示。Codex、Agents 与天气
+三个槽位始终轮播；Herdr 存在 `working` 的 Codex session 时，Codex 槽位显示
+15 秒 Token 速度仪表盘，否则显示原有的 8 秒 Codex 限额面板。
 
 通知、界面和天气的实现分别以 `docs/notify.md`、`docs/ui.md` 和
 `docs/weather.md` 为准；本文负责用户操作说明。日常运行默认关闭 Mock，
@@ -93,7 +93,8 @@ make firmware-flash PORT=/dev/cu.usbmodemXXXX
 workspace 有多个 tab 时显示为 `workspace · tab`。命名 session 或自定义 socket
 可在 `macos/configs/config.example.yaml` 的 `providers.herdr` 中配置。
 Bridge 还会下发 `agents.codex_active`：只要任意 Codex session 为 `working`，设备
-就立即切到速度仪表盘；没有活跃 Codex session 或 Herdr 断连时，该页不参与轮播。
+就立即切到速度仪表盘；没有活跃 Codex session 或 Herdr 断连时，Codex 槽位恢复
+显示原有的限额面板，而不是退出轮播。
 
 Bridge 默认扫描 `/dev/cu.usbmodem*`。USB 握手完成后设备暂停 WebSocket；拔线或心跳
 超时后自动恢复 Wi-Fi，不需要重新配网。应用日志已与 USB 业务帧分离到 UART0。

@@ -7,10 +7,12 @@
 uint32_t beacon_ui_page_interval_ms(beacon_page_t page)
 {
     switch (page) {
+    case BEACON_PAGE_CODEX:
+        return 8000;
+    case BEACON_PAGE_TOKEN_RATE:
+        return 15000;
     case BEACON_PAGE_AGENTS:
         return 6000;
-    case BEACON_PAGE_CODEX:
-        return 15000;
     case BEACON_PAGE_WEATHER:
     default:
         return 8000;
@@ -31,6 +33,7 @@ bool beacon_ui_page_affected_by_domains(beacon_page_t page, uint8_t domains,
     uint8_t page_domain;
     switch (page) {
     case BEACON_PAGE_CODEX:
+    case BEACON_PAGE_TOKEN_RATE:
         page_domain = BEACON_STATE_DOMAIN_CODEX;
         break;
     case BEACON_PAGE_AGENTS:
@@ -56,12 +59,13 @@ static beacon_page_t next_page(beacon_page_t page, bool codex_active)
 {
     switch (page) {
     case BEACON_PAGE_CODEX:
+    case BEACON_PAGE_TOKEN_RATE:
         return BEACON_PAGE_AGENTS;
     case BEACON_PAGE_AGENTS:
         return BEACON_PAGE_WEATHER;
     case BEACON_PAGE_WEATHER:
     default:
-        return codex_active ? BEACON_PAGE_CODEX : BEACON_PAGE_AGENTS;
+        return codex_active ? BEACON_PAGE_TOKEN_RATE : BEACON_PAGE_CODEX;
     }
 }
 
@@ -73,12 +77,12 @@ void beacon_ui_state_init(beacon_ui_state_t *state)
     *state = (beacon_ui_state_t) {
         .mode = BEACON_UI_CAROUSEL,
         .saved_mode = BEACON_UI_CAROUSEL,
-        .page = BEACON_PAGE_AGENTS,
-        .saved_page = BEACON_PAGE_AGENTS,
+        .page = BEACON_PAGE_CODEX,
+        .saved_page = BEACON_PAGE_CODEX,
         .theme = BEACON_THEME_BLUE,
         .codex_active = false,
-        .carousel_remaining_ms = 6000,
-        .saved_carousel_remaining_ms = 6000,
+        .carousel_remaining_ms = 8000,
+        .saved_carousel_remaining_ms = 8000,
     };
 }
 
@@ -94,33 +98,34 @@ bool beacon_ui_state_set_codex_active(beacon_ui_state_t *state, bool active)
     }
     if (active) {
         if (state->mode == BEACON_UI_NOTIFICATION) {
-            state->saved_page = BEACON_PAGE_CODEX;
+            state->saved_page = BEACON_PAGE_TOKEN_RATE;
             state->saved_carousel_remaining_ms =
-                beacon_ui_page_interval_ms(BEACON_PAGE_CODEX);
+                beacon_ui_page_interval_ms(BEACON_PAGE_TOKEN_RATE);
             return false;
         }
 
         const bool visible_page_changed =
-            state->mode == BEACON_UI_CAROUSEL && state->page != BEACON_PAGE_CODEX;
-        state->page = BEACON_PAGE_CODEX;
-        state->carousel_remaining_ms = beacon_ui_page_interval_ms(BEACON_PAGE_CODEX);
+            state->mode == BEACON_UI_CAROUSEL && state->page != BEACON_PAGE_TOKEN_RATE;
+        state->page = BEACON_PAGE_TOKEN_RATE;
+        state->carousel_remaining_ms =
+            beacon_ui_page_interval_ms(BEACON_PAGE_TOKEN_RATE);
         return visible_page_changed;
     }
 
     if (state->mode == BEACON_UI_NOTIFICATION) {
-        if (state->saved_page == BEACON_PAGE_CODEX) {
-            state->saved_page = BEACON_PAGE_AGENTS;
+        if (state->saved_page == BEACON_PAGE_TOKEN_RATE) {
+            state->saved_page = BEACON_PAGE_CODEX;
             state->saved_carousel_remaining_ms =
-                beacon_ui_page_interval_ms(BEACON_PAGE_AGENTS);
+                beacon_ui_page_interval_ms(BEACON_PAGE_CODEX);
         }
         return false;
     }
 
-    if (state->page != BEACON_PAGE_CODEX) {
+    if (state->page != BEACON_PAGE_TOKEN_RATE) {
         return false;
     }
-    state->page = BEACON_PAGE_AGENTS;
-    state->carousel_remaining_ms = beacon_ui_page_interval_ms(BEACON_PAGE_AGENTS);
+    state->page = BEACON_PAGE_CODEX;
+    state->carousel_remaining_ms = beacon_ui_page_interval_ms(BEACON_PAGE_CODEX);
     return state->mode == BEACON_UI_CAROUSEL;
 }
 
@@ -175,8 +180,8 @@ void beacon_ui_state_pin_token_rate(beacon_ui_state_t *state)
     if (state == NULL || state->mode != BEACON_UI_CAROUSEL) {
         return;
     }
-    state->page = BEACON_PAGE_CODEX;
-    state->carousel_remaining_ms = beacon_ui_page_interval_ms(BEACON_PAGE_CODEX);
+    state->page = BEACON_PAGE_TOKEN_RATE;
+    state->carousel_remaining_ms = beacon_ui_page_interval_ms(BEACON_PAGE_TOKEN_RATE);
     state->carousel_paused = true;
 }
 
@@ -184,6 +189,10 @@ void beacon_ui_state_resume_carousel(beacon_ui_state_t *state)
 {
     if (state != NULL && state->mode == BEACON_UI_CAROUSEL) {
         state->carousel_paused = false;
+        if (!state->codex_active && state->page == BEACON_PAGE_TOKEN_RATE) {
+            state->page = BEACON_PAGE_CODEX;
+            state->carousel_remaining_ms = beacon_ui_page_interval_ms(BEACON_PAGE_CODEX);
+        }
     }
 }
 

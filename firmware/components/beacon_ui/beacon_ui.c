@@ -164,6 +164,52 @@ static uint32_t quota_color(const beacon_codex_home_t *home)
     return COLOR_BLUE;
 }
 
+static void create_codex_home(const beacon_codex_home_t *home, lv_coord_t y)
+{
+    char value[24];
+    set_text(create_label(8, y, 64, 18, FONT_HEADING_14, LV_TEXT_ALIGN_LEFT,
+                          COLOR_FOREGROUND), home->label);
+    lv_snprintf(value, sizeof(value), "%u%%", home->weekly_remaining_percent);
+    set_text(create_label(70, y - 3, 60, 25, FONT_HEADING_24, LV_TEXT_ALIGN_LEFT,
+                          quota_color(home)), value);
+    set_text(create_label(158, y, 154, 18, FONT_BODY_14, LV_TEXT_ALIGN_RIGHT,
+                          COLOR_MUTED), home->weekly_reset);
+
+    lv_obj_t *bar = lv_bar_create(screen);
+    lv_obj_set_pos(bar, 8, y + 25);
+    lv_obj_set_size(bar, 142, 7);
+    lv_bar_set_range(bar, 0, 100);
+    lv_bar_set_value(bar, home->weekly_remaining_percent, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(COLOR_SUBTLE), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(quota_color(home)), LV_PART_INDICATOR);
+    lv_obj_set_style_radius(bar, 2, LV_PART_MAIN | LV_PART_INDICATOR);
+
+    if (home->reset_cards_available < 0) {
+        lv_snprintf(value, sizeof(value), "重置卡 - | -");
+    } else {
+        lv_snprintf(value, sizeof(value), "重置卡 %d | %s", home->reset_cards_available,
+                    home->nearest_card_expiry);
+    }
+    set_text(create_label(158, y + 20, 154, 18, FONT_BODY_14, LV_TEXT_ALIGN_RIGHT,
+                          COLOR_MUTED), value);
+}
+
+static void show_codex_quota_page(void)
+{
+    begin_screen(COLOR_BACKGROUND);
+    create_header("CODEX 配额", connection_suffix());
+    for (size_t index = 0; index < app_state.codex.home_count && index < 2; ++index) {
+        create_codex_home(&app_state.codex.homes[index], index == 0 ? 29 : 78);
+    }
+    create_box(8, 128, 304, 36, COLOR_SUBTLE);
+    set_text(create_label(16, 137, 150, 18, FONT_BODY_14, LV_TEXT_ALIGN_LEFT,
+                          COLOR_MUTED), "0-0 中转");
+    set_text(create_label(172, 133, 132, 24, FONT_HEADING_18, LV_TEXT_ALIGN_RIGHT,
+                          app_state.codex.relay.is_valid ? COLOR_FOREGROUND : COLOR_YELLOW),
+             app_state.codex.relay.display);
+}
+
 static int32_t token_rate_gauge_value(const beacon_token_rate_state_t *rate)
 {
     if (!rate->available || rate->tokens_per_second <= 0.0f) {
@@ -361,7 +407,7 @@ static void create_codex_fuel(const beacon_codex_home_t *home, lv_coord_t y)
                           COLOR_MUTED), cards);
 }
 
-static void show_codex_page(bool animate_zero_return)
+static void show_token_rate_page(bool animate_zero_return)
 {
     begin_screen(COLOR_BACKGROUND);
     create_header("TOKEN 速度", connection_suffix());
@@ -596,7 +642,10 @@ static bool render_page(beacon_page_t page, bool animate_zero_return)
 {
     switch (page) {
     case BEACON_PAGE_CODEX:
-        show_codex_page(animate_zero_return);
+        show_codex_quota_page();
+        break;
+    case BEACON_PAGE_TOKEN_RATE:
+        show_token_rate_page(animate_zero_return);
         break;
     case BEACON_PAGE_AGENTS:
         show_agents_page();
@@ -629,7 +678,7 @@ void beacon_ui_refresh_page(beacon_page_t page)
         return;
     }
     lv_anim_del(screen, NULL);
-    if (!render_page(page, page == BEACON_PAGE_CODEX)) {
+    if (!render_page(page, page == BEACON_PAGE_TOKEN_RATE)) {
         return;
     }
     lv_obj_set_style_opa(screen, LV_OPA_COVER, 0);

@@ -10,10 +10,11 @@
 
 ### 1.1 页面列表
 
-普通轮播有三种页面，其中 Agents、Weather 始终参与，Codex 按活跃状态动态参与：
+普通轮播始终有三个槽位：Codex 槽位、Agents、Weather。Codex 槽位根据活跃状态在
+原限额面板和 Token 速度面板之间切换：
 
 ```text
-PAGE_CODEX
+PAGE_CODEX_QUOTA / PAGE_TOKEN_RATE（二选一）
 PAGE_AGENTS
 PAGE_WEATHER
 ```
@@ -29,7 +30,8 @@ PAGE_DIAGNOSTICS       手动进入的诊断页
 
 | 页面 | 默认停留 |
 |---|---:|
-| Codex | 15 秒，仅 `agents.codex_active=true` 时参与 |
+| Codex 限额 | 8 秒，`agents.codex_active=false` 时显示 |
+| Token 速度 | 15 秒，`agents.codex_active=true` 时替换限额面板 |
 | Agents | 6 秒 |
 | Weather | 8 秒 |
 
@@ -37,8 +39,9 @@ PAGE_DIAGNOSTICS       手动进入的诊断页
 
 Herdr 首次报告任意 Codex session 从非活跃变为 `working` 时，立即切换到 Codex
 速度仪表盘并开始完整 15 秒倒计时；保持 `working` 的后续 snapshot/patch 不得重复
-续时。所有 Codex session 都不再是 `working` 或 Herdr 断连时，Codex 页退出轮播；
-若当时正显示 Codex 页则立即切到 Agents，否则不打断当前 Agents/Weather 页。
+续时。所有 Codex session 都不再是 `working` 或 Herdr 断连时，Codex 槽位恢复原
+限额面板；若当时正显示速度页则立即替换并开始完整 8 秒倒计时，否则不打断当前
+Agents/Weather 页。
 全屏通知和手动诊断页保持更高显示优先级，此时只更新退出后的目标页面。
 
 ### 1.2 全局区域
@@ -62,7 +65,8 @@ Herdr 首次报告任意 Codex session 从非活跃变为 `working` 时，立即
 - 页面中不要同时强调超过 3 个结论；
 - 不使用触摸手势；
 - BOOT 短按切下一页，连按三下立即固定显示 Codex Token 速度页并暂停轮播；
-- 固定显示期间再短按一次恢复轮播，并从 Codex 页的完整 15 秒停留开始；
+- 固定显示期间再短按一次恢复轮播；Codex 活跃时从完整 15 秒速度页开始，非活跃时
+  切回完整 8 秒限额页；
 - 页面使用固定网格，数据变化不得导致整体跳动；
 - 所有动态字符串先由 Mac 服务压缩，固件仍按像素宽度截断；
 - 时间统一按设备配置时区显示，默认 `Asia/Shanghai`；
@@ -86,7 +90,8 @@ WiFi 部分可用     WebSocket 在线但部分 Provider stale
 
 ### 2.1 产品目标
 
-同一页同时显示：
+Codex 槽位有两套互斥视图：非活跃时用原限额面板完整显示下面第 2～4 项；活跃时
+用 Token 速度面板同时显示：
 
 1. 所有本机 patched Codex 进程的实时全局 completion-output Token 速度；
 2. 两个独立 `CODEX_HOME` 的一周配额；
@@ -1028,7 +1033,7 @@ Mac Mock 必须提供固定样例：
 
 ## 9. 当前阶段完成定义
 
-- [ ] 轮播只有 Codex、Agents、Weather 三页；
+- [ ] 每轮只有一个 Codex 槽位、Agents、Weather，Codex 槽位在限额和速度间二选一；
 - [ ] Codex 页同时显示两个 `CODEX_HOME`；
 - [ ] 每个 Home 显示一周剩余、一周重置、重置卡数量、最近卡过期时间；
 - [ ] 无任何 5 小时窗口字段或 UI；

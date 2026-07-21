@@ -6,7 +6,8 @@
 #include <string.h>
 
 static const beacon_page_content_t PAGES[BEACON_PAGE_COUNT] = {
-    [BEACON_PAGE_CODEX] = {.title = "TOKEN 速度"},
+    [BEACON_PAGE_CODEX] = {.title = "CODEX 配额"},
+    [BEACON_PAGE_TOKEN_RATE] = {.title = "TOKEN 速度"},
     [BEACON_PAGE_AGENTS] = {.title = "智能体"},
     [BEACON_PAGE_WEATHER] = {.title = "天气"},
 };

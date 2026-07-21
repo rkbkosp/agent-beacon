@@ -6,6 +6,7 @@
 int main(void)
 {
     static const char *const expected_titles[] = {
+        "CODEX 配额",
         "TOKEN 速度",
         "智能体",
         "天气",
